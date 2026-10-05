@@ -9,7 +9,6 @@ import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/ui.dart';
 import 'day_board_screen.dart';
-import 'sup_sheets_screen.dart';
 
 /// Supervisor home: today's sites (one tap to the day board), rejected rows, paper sheets.
 class SupHomeScreen extends StatefulWidget {
@@ -105,7 +104,6 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
                             _load();
                           }
                         }),
-                        _heroButton(Icons.description_rounded, 'Paper sheets', () => Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const SupSheetsScreen()))),
                       ]),
                     ]),
                   ),
@@ -221,7 +219,6 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
             trailing: _rejected == 0 ? null : Pill('$_rejected', color: AppColors.breakdown),
             onTap: () => _go(const RejectedRowsScreen()),
           ),
-          ListTile(leading: const Icon(Icons.description_rounded), title: const Text('Paper sheets'), onTap: () => _go(const SupSheetsScreen())),
           const Divider(),
           ListTile(leading: const Icon(Icons.lock_reset_rounded), title: const Text('Change password'), onTap: () => _go(const ChangePasswordScreen())),
           ListTile(

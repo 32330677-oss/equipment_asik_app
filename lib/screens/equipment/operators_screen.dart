@@ -8,15 +8,11 @@ import '../../core/theme.dart';
 import '../../widgets/lookups.dart';
 import '../../widgets/ui.dart';
 
-/// Licence badge: expired / expires within 30 days / valid.
+/// Licence expiry is information only: it never blocks check-in or payroll.
 Widget licenceBadge(Json o) {
   final exp = o.strOrNull('license_expiry');
-  if (exp == null) return const Pill('No licence date', color: AppColors.neutral);
-  final d = Fmt.parse(exp);
-  final days = d == null ? 999 : d.difference(DateTime.now()).inDays;
-  if (o.flag('license_expired') || days < 0) return Pill('Expired ${Fmt.date(exp)}', color: AppColors.breakdown, icon: Icons.error_rounded);
-  if (days <= 30) return Pill('Expires ${Fmt.date(exp)}', color: AppColors.standby, icon: Icons.schedule_rounded);
-  return Pill('Valid to ${Fmt.date(exp)}', color: AppColors.working);
+  if (exp == null) return const Text('-', style: TextStyle(color: AppColors.muted));
+  return Text('Until ${Fmt.date(exp)}', style: const TextStyle(color: AppColors.muted, fontSize: 12.5));
 }
 
 /// Machine drivers supplied by the vendors.
@@ -66,10 +62,6 @@ class _OperatorsScreenState extends State<OperatorsScreen> {
   Widget build(BuildContext context) {
     final rows = _s.data ?? <Json>[];
     final admin = Auth.I.isAdmin;
-    final expiring = rows.where((o) {
-      final d = Fmt.parse(o.strOrNull('license_expiry'));
-      return d != null && d.difference(DateTime.now()).inDays <= 30;
-    }).length;
     return PageBody(onRefresh: _load, children: [
       PageHeader(title: 'Operators', subtitle: 'Drivers supplied by the vendors with their machines', actions: [
         SizedBox(
@@ -98,7 +90,6 @@ class _OperatorsScreenState extends State<OperatorsScreen> {
       ]),
       Wrap(spacing: 12, runSpacing: 12, children: [
         KpiTile(label: 'Operators', value: '${rows.length}', icon: Icons.badge_rounded),
-        KpiTile(label: 'Licence expired / < 30 days', value: '$expiring', color: expiring == 0 ? AppColors.working : AppColors.standby, icon: Icons.assignment_late_rounded, width: 230),
       ]),
       const SizedBox(height: 14),
       if (_s.loading && _s.data == null)
@@ -110,7 +101,7 @@ class _OperatorsScreenState extends State<OperatorsScreen> {
           empty: 'No operator.',
           columns: const [
             DataColumn(label: Text('Name')), DataColumn(label: Text('Vendor')), DataColumn(label: Text('Phone')),
-            DataColumn(label: Text('Licence')), DataColumn(label: Text('Licence validity')), DataColumn(label: Text('Status')), DataColumn(label: Text('')),
+            DataColumn(label: Text('Licence')), DataColumn(label: Text('Licence expiry')), DataColumn(label: Text('Status')), DataColumn(label: Text('')),
           ],
           rows: [
             for (final o in rows)

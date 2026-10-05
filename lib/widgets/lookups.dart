@@ -31,7 +31,7 @@ class Lookups {
     final rows = await Api.I.getList('/equipment/operators', query: {'vendor_id': vendorId, 'status': 'Active'});
     return [
       for (final r in rows)
-        PickOption(r.intv('operator_id'), r.str('full_name'), r.flag('license_expired') ? 'Licence expired ${r.str('license_expiry')}' : r.strOrNull('license_expiry') == null ? null : 'Licence until ${r.str('license_expiry')}'),
+        PickOption(r.intv('operator_id'), r.str('full_name'), r.strOrNull('license_expiry') == null ? null : 'Licence until ${r.str('license_expiry')}'),
     ];
   }
 

@@ -3,7 +3,7 @@
 One app, two experiences:
 
 - **Admin / Accountant** (desktop or web): Live board, Attendance review, Paper sheets, Payroll, Fuel & adjustments, Machines (rate cards + "Test this price"), Vendors, Operators, Sites, Users, Settings, Audit log.
-- **Supervisor** (phone): my sites today → day board (check in, pause, check out, whole-day status, submit), rejected rows, paper sheets (print, photograph the signed sheet).
+- **Supervisor** (phone): my sites today → day board (check in, pause, check out, whole-day status, submit) and rejected rows. Supervisors only record times; the accountant uploads the signed monthly sheets.
 
 Supervisors never see prices.
 
@@ -44,13 +44,6 @@ flutter run --dart-define=API_BASE_URL=http://192.168.1.20:5055/api
 
 - Add `<uses-permission android:name="android.permission.INTERNET"/>` above `<application>`.
 - Add `android:usesCleartextTraffic="true"` to `<application>`. This is needed only while the server is plain `http://`; remove it once you use HTTPS.
-
-**iOS** — `ios/Runner/Info.plist`:
-
-```xml
-<key>NSCameraUsageDescription</key><string>Photograph the signed paper timesheets.</string>
-<key>NSPhotoLibraryUsageDescription</key><string>Attach photos of the paper timesheets.</string>
-```
 
 **macOS / Windows / Web** need nothing extra. The backend allows all origins by default (`CORS_ORIGINS=*`).
 

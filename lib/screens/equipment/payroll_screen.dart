@@ -10,6 +10,9 @@ import '../../widgets/lookups.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 
+/// Shown with the blockers but never stop the generation.
+const _infoOnly = {'IN_OTHER_BATCH', 'SCAN_MISSING'};
+
 const _blockerHelp = {
   'NOT_APPROVED': 'Approve or reject them in Attendance review.',
   'OPEN_SESSION': 'The supervisor must check the machine out.',
@@ -18,6 +21,8 @@ const _blockerHelp = {
   'NO_RATE_CARD': 'Add a rate card for these dates on the machine page.',
   'FUEL_UNPRICED': 'Enter the price per litre in Fuel & adjustments.',
   'IN_OTHER_BATCH': 'Already paid in another batch; they are skipped.',
+  'FUEL_PRICE_MISSING': 'Add the official fuel price for these dates in Fuel & adjustments > Fuel prices.',
+  'SCAN_MISSING': 'Information only: the accountant must upload these signed sheets (Paper sheets) before the Admin finalizes.',
 };
 
 Color _batchColor(String status, bool finalized) {
@@ -211,7 +216,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
-  bool get _hasBlocking => (_blockers ?? []).any((b) => b.str('code') != 'IN_OTHER_BATCH');
+  bool get _hasBlocking => (_blockers ?? []).any((b) => !_infoOnly.contains(b.str('code')));
 
   Future<void> _generate({bool accept = false, String? currency}) async {
     if (_hasBlocking && !accept) {
@@ -388,8 +393,8 @@ class _BlockersCard extends StatelessWidget {
           Theme(
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
-              leading: Icon(b.str('code') == 'IN_OTHER_BATCH' ? Icons.info_outline_rounded : Icons.block_rounded,
-                  color: b.str('code') == 'IN_OTHER_BATCH' ? AppColors.info : AppColors.breakdown),
+              leading: Icon(_infoOnly.contains(b.str('code')) ? Icons.info_outline_rounded : Icons.block_rounded,
+                  color: _infoOnly.contains(b.str('code')) ? AppColors.info : AppColors.breakdown),
               title: Text('${b.str('message')}  (${b.str('count')})', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
               subtitle: Text(_blockerHelp[b.str('code')] ?? '', style: const TextStyle(fontSize: 12.5)),
               childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -397,6 +402,7 @@ class _BlockersCard extends StatelessWidget {
                 Wrap(spacing: 6, runSpacing: 6, children: [
                   for (final i in b.list('items').take(60))
                     Pill([
+                      if (i.strOrNull('sheet_code') != null) '${i.str('sheet_code')} rows to ${i.str('needed_row')}, uploaded to ${i.str('scanned_row')}',
                       i.str('equipment_code'),
                       if (i.strOrNull('site_code') != null) i.str('site_code'),
                       Fmt.date(i.strOrNull('record_date') ?? i.strOrNull('issue_date')),
@@ -414,11 +420,12 @@ class _BlockersCard extends StatelessWidget {
 
 /// One machine line of a preview / batch with its calculation lines.
 class _ItemTile extends StatelessWidget {
-  const _ItemTile({required this.item, this.preview = false, this.onRows, this.onPdf});
+  const _ItemTile({required this.item, this.preview = false, this.onRows, this.onPdf, this.onFuelPdf});
   final Json item;
   final bool preview;
   final VoidCallback? onRows;
   final VoidCallback? onPdf;
+  final VoidCallback? onFuelPdf;
 
   @override
   Widget build(BuildContext context) {
@@ -439,6 +446,14 @@ class _ItemTile extends StatelessWidget {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('${item.str('equipment_code')}  ${item.str('type_name')}', style: const TextStyle(fontWeight: FontWeight.w800)),
                 Text('${item.str('vendor_name')}  ·  ${item.str('site_code')}  ·  ${item.str('billing_mode')}', style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+                if (item.strOrNull('invoice_no') != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Wrap(spacing: 6, children: [
+                      Pill(item.str('invoice_no'), color: AppColors.navy, icon: Icons.receipt_long_rounded),
+                      if (item.strOrNull('fuel_invoice_no') != null) Pill(item.str('fuel_invoice_no'), color: AppColors.gold, icon: Icons.local_gas_station_rounded),
+                    ]),
+                  ),
               ]),
             ),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
@@ -455,6 +470,7 @@ class _ItemTile extends StatelessWidget {
               if (item.dbl('standby_hours') > 0) kv('Standby h', item.str('standby_hours')),
               if (item.dbl('breakdown_hours') > 0) kv('Breakdown h', item.str('breakdown_hours')),
               if (item.dbl('topup_hours') > 0) kv('Min. top-up h', item.str('topup_hours')),
+              if ((item.dblOrNull('fuel_difference') ?? 0) != 0) kv('Fuel price difference', Fmt.money(item.dbl('fuel_difference'), cur)),
             ]),
           ),
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
@@ -474,18 +490,21 @@ class _ItemTile extends StatelessWidget {
                         child: Text('${_lineName(l.str('line_type'))}${l.strOrNull('note') == null ? '' : '\n${l.str('note')}'}', style: const TextStyle(fontSize: 13)),
                       ),
                       _Td('${Fmt.num2(l.dblOrNull('quantity'))} ${l.str('unit')}'),
-                      _Td(Fmt.num2(l.dblOrNull('unit_price'))),
+                      _Td(l.str('line_type') == 'FuelPriceDifference' || l.str('line_type') == 'Fuel'
+                          ? (l.dblOrNull('unit_price') ?? 0).toStringAsFixed(3)
+                          : Fmt.num2(l.dblOrNull('unit_price'))),
                       _Td(Fmt.money(l.dblOrNull('amount'), cur), color: l.dbl('amount') < 0 ? AppColors.breakdown : AppColors.ink, bold: true),
                     ],
                   ),
               ],
             ),
-            if (onRows != null || onPdf != null)
+            if (onRows != null || onPdf != null || onFuelPdf != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Wrap(spacing: 8, children: [
                   if (onRows != null) TextButton.icon(onPressed: onRows, icon: const Icon(Icons.list_alt_rounded, size: 18), label: const Text('Daily rows')),
-                  if (onPdf != null) TextButton.icon(onPressed: onPdf, icon: const Icon(Icons.picture_as_pdf_rounded, size: 18), label: const Text('Machine statement')),
+                  if (onPdf != null) TextButton.icon(onPressed: onPdf, icon: const Icon(Icons.picture_as_pdf_rounded, size: 18), label: const Text('Machine invoice')),
+                  if (onFuelPdf != null) TextButton.icon(onPressed: onFuelPdf, icon: const Icon(Icons.local_gas_station_rounded, size: 18), label: const Text('Fuel difference statement')),
                 ]),
               ),
           ],
@@ -508,6 +527,7 @@ String _lineName(String t) {
     'Adjustment': 'Adjustment',
     'AbsenceDeduction': 'Absence deduction',
     'BreakdownDeduction': 'Breakdown deduction',
+    'FuelPriceDifference': 'Fuel price difference',
   };
   return names[t] ?? t.replaceAllMapped(RegExp(r'(?<=[a-z])([A-Z])'), (m) => ' ${m[1]!.toLowerCase()}');
 }
@@ -584,7 +604,44 @@ class _BatchScreenState extends State<BatchScreen> {
   Future<void> _finalize() async {
     final ok = await confirmDialog(context, 'Finalize batch #${widget.id}?',
         'The rows, fuel and adjustments of this batch are locked. Later changes need a correction and a new version.', confirm: 'Finalize');
-    if (ok) _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/finalize'), 'Batch finalized.');
+    if (!ok) return;
+    setState(() => _busy = true);
+    try {
+      await Api.I.patch('/equipment/payroll/batches/${widget.id}/finalize');
+      if (mounted) showSnack(context, 'Batch finalized. Invoice numbers issued.');
+      await _load();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'SCAN_MISSING') {
+        final sheets = e.details == null ? <Json>[] : e.details!.list('sheets');
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Signed sheets missing'),
+            content: SizedBox(
+              width: 460,
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('The accountant must upload the signed monthly sheet (Paper sheets) up to these rows before the batch can be finalized:'),
+                const SizedBox(height: 10),
+                for (final sh in sheets)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.description_rounded, color: AppColors.standby),
+                    title: Text('${sh.str('sheet_code')}  ·  ${sh.str('equipment_code')} at ${sh.str('site_code')}'),
+                    subtitle: Text('Rows up to ${sh.str('needed_row')} needed, uploaded up to ${sh.str('scanned_row')}'),
+                  ),
+              ]),
+            ),
+            actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+          ),
+        );
+      } else {
+        showError(context, e);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _markPaid() async {
@@ -689,7 +746,7 @@ class _BatchScreenState extends State<BatchScreen> {
               onSelected: (v) => v == 'summary' ? _pdf('summary') : _vendorPdf(),
               itemBuilder: (_) => const [
                 PopupMenuItem(value: 'summary', child: Text('Summary PDF')),
-                PopupMenuItem(value: 'vendor', child: Text('Vendor statement PDF')),
+                PopupMenuItem(value: 'vendor', child: Text('Vendor invoice PDF')),
               ],
             ),
             const SizedBox(width: 8),
@@ -708,8 +765,10 @@ class _BatchScreenState extends State<BatchScreen> {
     final cur = b.str('currency');
     final status = b.str('status');
     final fin = b.flag('is_finalized');
-    final canFinalize = status == 'Generated' && !fin && !Auth.I.isSupervisor;
-    final canPay = status == 'Generated' && fin;
+    final canFinalize = status == 'Generated' && !fin && Auth.I.isAdmin; // the Admin finalizes and marks paid
+    final canPay = status == 'Generated' && fin && Auth.I.isAdmin;
+    final hasFuelDiff = b.list('items').any((i) => (i.dblOrNull('fuel_difference') ?? 0) != 0);
+    final vendorInvoices = b.list('invoices').where((i) => i.str('kind') == 'Vendor').toList();
     final canVoid = status == 'Generated';
     final canSupersede = fin && (status == 'Generated' || status == 'Paid');
     return PageBody(onRefresh: _load, maxWidth: 1200, children: [
@@ -751,7 +810,25 @@ class _BatchScreenState extends State<BatchScreen> {
             const SizedBox(height: 14),
             _Timeline(b: b),
             const SizedBox(height: 14),
+            if (vendorInvoices.isNotEmpty) ...[
+              Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                const Text('Vendor invoices:', style: TextStyle(color: AppColors.muted)),
+                for (final v in vendorInvoices)
+                  ActionChip(
+                    avatar: const Icon(Icons.receipt_long_rounded, size: 18),
+                    label: Text('${v.str('invoice_no')}  ·  ${Fmt.money2(v.strOrNull('amount'), cur)}'),
+                    onPressed: () => _pdf('vendor', vendorId: v.intv('vendor_id'), suffix: v.str('invoice_no')),
+                  ),
+              ]),
+              const SizedBox(height: 12),
+            ],
+            if (status == 'Generated' && !fin && !Auth.I.isAdmin)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 10),
+                child: Text('Upload the signed monthly sheets in Paper sheets; the Admin then finalizes this batch.', style: TextStyle(color: AppColors.muted)),
+              ),
             Wrap(spacing: 8, runSpacing: 8, children: [
+              if (hasFuelDiff) OutlinedButton.icon(onPressed: () => _pdf('fueldiff', suffix: 'fuel-difference'), icon: const Icon(Icons.local_gas_station_rounded), label: const Text('Fuel difference statements')),
               if (canFinalize) FilledButton.icon(onPressed: _busy || b.flag('stale') ? null : _finalize, icon: const Icon(Icons.lock_rounded), label: const Text('Finalize')),
               if (canPay) FilledButton.icon(onPressed: _busy ? null : _markPaid, icon: const Icon(Icons.paid_rounded), label: const Text('Mark paid'), style: FilledButton.styleFrom(backgroundColor: AppColors.working)),
               if (canSupersede) OutlinedButton.icon(onPressed: _busy ? null : _supersede, icon: const Icon(Icons.difference_rounded), label: const Text('New version')),
@@ -769,6 +846,7 @@ class _BatchScreenState extends State<BatchScreen> {
               item: {...it, 'currency': cur},
               onRows: () => _rows(it),
               onPdf: () => _pdf('machine', equipmentId: it.intv('equipment_id'), suffix: it.str('equipment_code')),
+              onFuelPdf: (it.dblOrNull('fuel_difference') ?? 0) == 0 ? null : () => _pdf('fueldiff', equipmentId: it.intv('equipment_id'), suffix: 'fuel-${it.str('equipment_code')}'),
             ),
         ]),
       ),

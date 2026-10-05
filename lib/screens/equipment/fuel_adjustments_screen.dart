@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/api.dart';
+import '../../core/auth.dart';
 import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
@@ -15,7 +16,7 @@ class FuelAdjustmentsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Column(children: [
         Material(
           color: Colors.white,
@@ -27,13 +28,14 @@ class FuelAdjustmentsScreen extends StatelessWidget {
             unselectedLabelColor: AppColors.muted,
             tabs: const [
               Tab(icon: Icon(Icons.local_gas_station_rounded, size: 20), text: 'Fuel issues'),
+              Tab(icon: Icon(Icons.trending_up_rounded, size: 20), text: 'Fuel prices'),
               Tab(icon: Icon(Icons.tune_rounded, size: 20), text: 'Adjustments'),
               Tab(icon: Icon(Icons.gavel_rounded, size: 20), text: 'Corrections'),
             ],
           ),
         ),
         const Divider(height: 1),
-        const Expanded(child: TabBarView(children: [_FuelTab(), _AdjustmentsTab(), _CorrectionsTab()])),
+        const Expanded(child: TabBarView(children: [_FuelTab(), _FuelPricesTab(), _AdjustmentsTab(), _CorrectionsTab()])),
       ]),
     );
   }
@@ -568,5 +570,119 @@ class _Diff extends StatelessWidget {
           ),
       ]),
     );
+  }
+}
+
+// ================================================================= official fuel prices
+/// National fuel price list used by the fuel price difference. Each price is valid until the next one.
+class _FuelPricesTab extends StatefulWidget {
+  const _FuelPricesTab();
+  @override
+  State<_FuelPricesTab> createState() => _FuelPricesTabState();
+}
+
+class _FuelPricesTabState extends State<_FuelPricesTab> with AutomaticKeepAliveClientMixin {
+  final _s = Loadable<List<Json>>();
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _s.loading = true; _s.error = null; });
+    try {
+      _s.data = await Api.I.getList('/equipment/fuel-prices');
+    } catch (e) {
+      _s.error = e;
+    }
+    if (mounted) setState(() => _s.loading = false);
+  }
+
+  Future<void> _add() async {
+    var from = Fmt.today();
+    var currency = 'USD';
+    final price = TextEditingController();
+    final note = TextEditingController();
+    final r = await showFormDialog<Json>(
+      context,
+      title: 'New official fuel price',
+      width: 440,
+      onSave: () async => asJson(await Api.I.post('/equipment/fuel-prices', {
+        'currency': currency, 'effective_from': from, 'price_per_liter': numOrNull(price), if (textOrNull(note) != null) 'note': textOrNull(note),
+      })),
+      body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('Valid from this date until the next price. Used to pay the fuel price difference of the machines that have one.',
+            style: TextStyle(color: AppColors.muted, fontSize: 13)),
+        const SizedBox(height: 14),
+        DateField(label: 'Valid from', value: from, onChanged: (v) => set(() => from = v ?? from)),
+        const SizedBox(height: 12),
+        Dropdown<String>(label: 'Currency', value: currency, width: null, items: const [
+          DropdownMenuItem(value: 'USD', child: Text('USD')),
+          DropdownMenuItem(value: 'SYP', child: Text('SYP')),
+          DropdownMenuItem(value: 'EUR', child: Text('EUR')),
+        ], onChanged: (v) => set(() => currency = v ?? currency)),
+        const SizedBox(height: 12),
+        textField(price, 'Official price per litre', number: true, required: true),
+        const SizedBox(height: 12),
+        textField(note, 'Note', hint: 'e.g. decision no. / date of the increase'),
+      ]),
+    );
+    if (r != null) _load();
+  }
+
+  Future<void> _delete(Json p) async {
+    final ok = await confirmDialog(context, 'Delete this price?', '${p.str('currency')} ${p.str('price_per_liter')} from ${Fmt.date(p.str('effective_from'))}.', confirm: 'Delete', danger: true);
+    if (!ok) return;
+    try {
+      await Api.I.delete('/equipment/fuel-prices/${p.intv('fuel_price_id')}');
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final rows = _s.data ?? <Json>[];
+    final today = Fmt.today();
+    return PageBody(onRefresh: _load, maxWidth: 1000, children: [
+      PageHeader(title: 'Official fuel prices', subtitle: 'History of the national fuel price, used for the fuel price difference', actions: [
+        if (Auth.I.isAdmin) FilledButton.icon(onPressed: _add, icon: const Icon(Icons.add_rounded), label: const Text('New price')),
+      ]),
+      if (_s.loading && _s.data == null)
+        const LoadingView()
+      else if (_s.error != null)
+        ErrorView(error: _s.error!, onRetry: _load)
+      else
+        TableCard(
+          empty: 'No price yet. Add the official price before generating a payroll with a fuel difference.',
+          columns: const [
+            DataColumn(label: Text('Currency')), DataColumn(label: Text('Valid from')), DataColumn(label: Text('Until')),
+            DataColumn(label: Text('Price / L'), numeric: true), DataColumn(label: Text('Note')), DataColumn(label: Text('By')), DataColumn(label: Text('')),
+          ],
+          rows: [
+            for (final p in rows)
+              DataRow(cells: [
+                DataCell(Text(p.str('currency'), style: const TextStyle(fontWeight: FontWeight.w700))),
+                DataCell(Text(Fmt.date(p.str('effective_from')))),
+                DataCell(p.strOrNull('effective_to') == null
+                    ? (p.str('effective_from').compareTo(today) <= 0 ? const Pill('Current', color: AppColors.gold) : const Pill('Upcoming', color: AppColors.info))
+                    : Text(Fmt.date(p.str('effective_to')))),
+                DataCell(Text(p.str('price_per_liter'), style: const TextStyle(fontWeight: FontWeight.w800))),
+                DataCell(Text(p.str('note'))),
+                DataCell(Text(p.str('created_by'), style: const TextStyle(color: AppColors.muted, fontSize: 12.5))),
+                DataCell(Auth.I.isAdmin
+                    ? IconButton(tooltip: 'Delete', icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppColors.breakdown), onPressed: () => _delete(p))
+                    : const SizedBox()),
+              ]),
+          ],
+        ),
+    ]);
   }
 }

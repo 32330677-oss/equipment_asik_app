@@ -136,7 +136,7 @@ class _MachinesScreenState extends State<MachinesScreen> {
                   DataCell(Pill(r.str('status'), color: machineStatusColor(r.str('status')))),
                   DataCell(r.strOrNull('site_code') == null
                       ? const Text('-', style: TextStyle(color: AppColors.muted))
-                      : Text('${r.str('site_code')}${r.str('shift_type') == 'Night' ? ' (night)' : ''}', style: const TextStyle(fontWeight: FontWeight.w600))),
+                      : Text(r.str('deployments_today', r.str('site_code')), style: const TextStyle(fontWeight: FontWeight.w600))),
                   DataCell(r.strOrNull('rate_card_id') == null
                       ? Pill('No price', color: r.str('status') == 'Active' ? AppColors.breakdown : AppColors.neutral, icon: Icons.warning_amber_rounded)
                       : Text(rateText(r))),
@@ -432,6 +432,8 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                   const SizedBox(height: 14),
                   _rateCards(m),
                   const SizedBox(height: 14),
+                  _fuelTerms(m),
+                  const SizedBox(height: 14),
                   _recent(m),
                 ]),
     );
@@ -638,6 +640,84 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                         kv('Operator', c.flag('operator_included') ? 'included' : c.str('operator_daily_rate', 'not included')),
                         kv('Fuel', c.str('fuel_policy').replaceAll('CompanySupplies', 'We supply, ').replaceAll('VendorSupplies', 'Vendor')),
                       ]),
+                    ]),
+                  );
+                }),
+            ]),
+    );
+  }
+
+  // ------------------------------------------------------------- fuel price difference terms
+  Future<void> _newFuelTerms(Json m) async {
+    final last = m.list('fuel_terms').isEmpty ? null : m.list('fuel_terms').first;
+    var from = Fmt.today();
+    final base = TextEditingController(text: last?.str('base_price_per_liter') ?? '');
+    final lph = TextEditingController(text: last?.str('liters_per_hour') ?? '');
+    final note = TextEditingController();
+    final r = await showFormDialog<Json>(
+      context,
+      title: last == null ? 'Fuel price difference for ${m.str('equipment_code')}' : 'New fuel terms from a date',
+      width: 480,
+      onSave: () async => asJson(await Api.I.post('/equipment/machines/${widget.id}/fuel-terms', {
+        'effective_from': from, 'base_price_per_liter': numOrNull(base), 'liters_per_hour': numOrNull(lph), if (textOrNull(note) != null) 'note': textOrNull(note),
+      })),
+      body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(
+          last == null
+              ? 'The company pays the vendor the increase of the official fuel price: (official price - base price) x litres per hour x working hours (normal + overtime).'
+              : 'The current terms are closed the day before. Old invoices keep the values they used.',
+          style: const TextStyle(color: AppColors.muted, fontSize: 13),
+        ),
+        const SizedBox(height: 14),
+        DateField(label: 'From', value: from, onChanged: (v) => set(() => from = v ?? from)),
+        const SizedBox(height: 12),
+        textField(base, 'Base fuel price per litre', number: true, required: true, hint: 'price agreed when the machine joined'),
+        const SizedBox(height: 12),
+        textField(lph, 'Consumption (litres per working hour)', number: true, required: true, suffix: 'L/h'),
+        const SizedBox(height: 12),
+        textField(note, 'Note'),
+      ]),
+    );
+    if (r != null && mounted) {
+      showSnack(context, 'Fuel terms saved.');
+      _load();
+    }
+  }
+
+  Future<void> _endFuelTerms(Json t) async {
+    final d = await pickDate(context, initial: Fmt.today());
+    if (d == null) return;
+    _do(() => Api.I.patch('/equipment/fuel-terms/${t.intv('fuel_terms_id')}/end', {'effective_to': d}), 'Fuel difference stops after $d.');
+  }
+
+  Widget _fuelTerms(Json m) {
+    final terms = m.list('fuel_terms');
+    final today = Fmt.today();
+    return SectionCard(
+      title: 'Fuel price difference',
+      trailing: _admin
+          ? FilledButton.tonalIcon(
+              onPressed: () => _newFuelTerms(m),
+              icon: const Icon(Icons.local_gas_station_rounded),
+              label: Text(terms.isEmpty ? 'Set up' : 'New terms'),
+            )
+          : null,
+      child: terms.isEmpty
+          ? const EmptyView(text: 'No fuel price difference for this machine.', icon: Icons.local_gas_station_rounded)
+          : Column(children: [
+              for (final t in terms)
+                Builder(builder: (context) {
+                  final active = t.str('effective_from').compareTo(today) <= 0 && (t.strOrNull('effective_to') == null || t.str('effective_to').compareTo(today) >= 0);
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.local_gas_station_rounded, color: active ? AppColors.gold : AppColors.neutral),
+                    title: Text('Base ${t.str('base_price_per_liter')} / L  ·  ${t.str('liters_per_hour')} L per hour', style: const TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: Text('${Fmt.date(t.str('effective_from'))} → ${t.strOrNull('effective_to') == null ? 'open' : Fmt.date(t.str('effective_to'))}'
+                        '${t.strOrNull('note') == null ? '' : '  ·  ${t.str('note')}'}'),
+                    trailing: Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                      if (active) const Pill('Current', color: AppColors.gold),
+                      if (_admin && t.strOrNull('effective_to') == null)
+                        IconButton(tooltip: 'Stop from a date', icon: const Icon(Icons.event_busy_rounded), onPressed: () => _endFuelTerms(t)),
                     ]),
                   );
                 }),

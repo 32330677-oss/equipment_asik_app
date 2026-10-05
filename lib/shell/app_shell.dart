@@ -12,7 +12,6 @@ import '../screens/equipment/attendance_review_screen.dart';
 import '../screens/equipment/fuel_adjustments_screen.dart';
 import '../screens/equipment/live_board_screen.dart';
 import '../screens/equipment/machines_screen.dart';
-import '../screens/equipment/operators_screen.dart';
 import '../screens/equipment/payroll_screen.dart';
 import '../screens/equipment/timesheets_screen.dart';
 import '../screens/equipment/vendors_screen.dart';
@@ -45,7 +44,6 @@ class _AppShellState extends State<AppShell> {
       _NavItem('Fuel & adjustments', Icons.local_gas_station_rounded, () => const FuelAdjustmentsScreen()),
       _NavItem('Machines', Icons.precision_manufacturing_rounded, () => const MachinesScreen(), section: 'Fleet'),
       _NavItem('Vendors', Icons.business_rounded, () => const VendorsScreen()),
-      _NavItem('Operators', Icons.badge_rounded, () => const OperatorsScreen()),
       _NavItem('Sites', Icons.location_city_rounded, () => const SitesScreen(), section: 'Setup'),
       if (admin) _NavItem('Users', Icons.manage_accounts_rounded, () => const UsersScreen()),
       if (admin) _NavItem('Settings', Icons.tune_rounded, () => const SettingsScreen()),

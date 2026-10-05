@@ -159,7 +159,6 @@ Widget _gap() => const SizedBox(height: 12);
 // ----------------------------------------------------------------- check-in
 Future<bool?> checkInSheet(BuildContext context, {required Json machine, required int siteId, required String shift, required String date}) {
   var time = defaultTime(date, start: true, shift: shift);
-  PickOption? op = machine.intOrNull('default_operator_id') == null ? null : PickOption(machine.intv('default_operator_id'), machine.str('default_operator_name'));
   final meter = TextEditingController(text: machine.strOrNull('last_meter_end') ?? '');
   final remarks = TextEditingController();
   final hasMeter = machine.str('meter_unit', 'Hours') != 'None';
@@ -172,14 +171,12 @@ Future<bool?> checkInSheet(BuildContext context, {required Json machine, require
     submitLabel: 'Start work',
     submit: () => Api.I.post('/equipment/attendance/check-in', {
       'equipment_id': machine.intv('equipment_id'), 'site_id': siteId, 'shift_type': shift, 'check_in_time': time,
-      if (op != null) 'operator_id': op!.value,
       if (numOrNull(meter) != null) 'meter_start': numOrNull(meter),
       if (textOrNull(remarks) != null) 'remarks': textOrNull(remarks),
     }),
     body: (ctx, set) => [
       TimeField(label: 'Start time', value: time, baseDate: date, onChanged: (v) => set(() => time = v ?? time)),
       _gap(),
-      PickerField(label: 'Operator (driver)', valueLabel: op?.label, icon: Icons.badge_rounded, load: () => Lookups.operators(machine.intv('vendor_id')), onChanged: (v) => set(() => op = v)),
       if (hasMeter) ...[
         _gap(),
         textField(meter, 'Meter at start', number: true, suffix: machine.str('meter_unit') == 'Km' ? 'km' : 'h',
@@ -257,7 +254,7 @@ Future<bool?> checkOutSheet(BuildContext context, {required Json machine, requir
   return showActionSheet(
     context,
     title: 'Check out ${att.str('equipment_code')}',
-    subtitle: 'Started ${Fmt.time(att.str('check_in_time'))}${att.strOrNull('operator_name') == null ? '' : ' · ${att.str('operator_name')}'}',
+    subtitle: 'Started ${Fmt.time(att.str('check_in_time'))}',
     icon: Icons.logout_rounded,
     color: AppColors.navy,
     submitLabel: 'Finish the day',
@@ -380,7 +377,6 @@ Future<bool?> editRowSheet(BuildContext context, {required Json att, int? vendor
   final timed = working || att.strOrNull('check_in_time') != null;
   var inT = att.strOrNull('check_in_time');
   var outT = att.strOrNull('check_out_time');
-  PickOption? op = att.intOrNull('operator_id') == null ? null : PickOption(att.intv('operator_id'), att.str('operator_name'));
   final mStart = TextEditingController(text: att.str('meter_start'));
   final mEnd = TextEditingController(text: att.str('meter_end'));
   final work = TextEditingController(text: att.str('work_description'));
@@ -397,7 +393,6 @@ Future<bool?> editRowSheet(BuildContext context, {required Json att, int? vendor
       final body = <String, dynamic>{};
       if (inT != att.strOrNull('check_in_time') && inT != null) body['check_in_time'] = inT;
       if (outT != att.strOrNull('check_out_time') && outT != null) body['check_out_time'] = outT;
-      if (op != null && op!.value != att.intOrNull('operator_id')) body['operator_id'] = op!.value;
       if (working) {
         if (mStart.text.trim() != att.str('meter_start') && numOrNull(mStart) != null) body['meter_start'] = numOrNull(mStart);
         if (mEnd.text.trim() != att.str('meter_end') && numOrNull(mEnd) != null) body['meter_end'] = numOrNull(mEnd);
@@ -412,10 +407,6 @@ Future<bool?> editRowSheet(BuildContext context, {required Json att, int? vendor
         TimeField(label: 'Start', value: inT, baseDate: date, onChanged: (v) => set(() => inT = v ?? inT)),
         _gap(),
         TimeField(label: 'End', value: outT, baseDate: date, onChanged: (v) => set(() => outT = v ?? outT)),
-        _gap(),
-      ],
-      if (working && vendorId != null) ...[
-        PickerField(label: 'Operator', valueLabel: op?.label, icon: Icons.badge_rounded, clearable: false, load: () => Lookups.operators(vendorId), onChanged: (v) => set(() => op = v)),
         _gap(),
       ],
       if (working) ...[

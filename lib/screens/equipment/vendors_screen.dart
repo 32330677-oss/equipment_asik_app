@@ -9,7 +9,6 @@ import '../../widgets/lookups.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 import 'machines_screen.dart';
-import 'operators_screen.dart';
 
 /// Contracting companies that rent machines to us.
 class VendorsScreen extends StatefulWidget {
@@ -65,7 +64,7 @@ class _VendorsScreenState extends State<VendorsScreen> {
           DropdownMenuItem(value: 'Active', child: Text('Active')),
           DropdownMenuItem(value: 'Inactive', child: Text('Inactive')),
         ], onChanged: (v) { _status = v; _load(); }),
-        if (Auth.I.isAdmin)
+        if (Auth.I.isAdmin || Auth.I.isAccountant)
           FilledButton.icon(
             onPressed: () async {
               final v = await showVendorDialog(context);
@@ -204,7 +203,9 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
   List<Json> _contracts = [];
   Object? _error;
 
+  /// Contracts: Admin only. Vendor details and machines: Admin and Accountant.
   bool get _admin => Auth.I.isAdmin;
+  bool get _canEdit => Auth.I.isAdmin || Auth.I.isAccountant;
 
   @override
   void initState() {
@@ -315,7 +316,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
         actions: [
           if (v != null) ...[
             TextButton.icon(onPressed: _statement, icon: const Icon(Icons.picture_as_pdf_rounded), label: const Text('Statement')),
-            if (_admin)
+            if (_canEdit)
               PopupMenuButton<String>(
                 onSelected: (x) async {
                   if (x == 'edit') {
@@ -377,8 +378,6 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
                   _contractsCard(),
                   const SizedBox(height: 14),
                   _machinesCard(v),
-                  const SizedBox(height: 14),
-                  _operatorsCard(v),
                 ]),
     );
   }
@@ -431,7 +430,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
     final machines = v.list('machines');
     return SectionCard(
       title: 'Machines (${machines.length})',
-      trailing: _admin && v.str('status') == 'Active'
+      trailing: _canEdit && v.str('status') == 'Active'
           ? FilledButton.tonalIcon(
               onPressed: () async {
                 final m = await showMachineDialog(context, vendor: PickOption(widget.id, v.str('vendor_name')));
@@ -454,46 +453,6 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
                     await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => MachineDetailScreen(id: m.intv('equipment_id'))));
                     _load();
                   },
-                ),
-            ]),
-    );
-  }
-
-  Widget _operatorsCard(Json v) {
-    final ops = v.list('operators');
-    return SectionCard(
-      title: 'Operators (${ops.length})',
-      trailing: _admin
-          ? FilledButton.tonalIcon(
-              onPressed: () async {
-                final r = await showOperatorDialog(context, vendor: PickOption(widget.id, v.str('vendor_name')));
-                if (r != null) _load();
-              },
-              icon: const Icon(Icons.person_add_alt_1_rounded),
-              label: const Text('Add operator'),
-            )
-          : null,
-      child: ops.isEmpty
-          ? const EmptyView(text: 'No operator.', icon: Icons.badge_rounded)
-          : Column(children: [
-              for (final o in ops)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(child: Icon(Icons.person_rounded)),
-                  title: Text(o.str('full_name'), style: TextStyle(fontWeight: FontWeight.w700, color: o.str('status') == 'Active' ? AppColors.ink : AppColors.muted)),
-                  subtitle: Text([o.str('phone_number'), o.str('license_number')].where((x) => x.isNotEmpty).join('  ·  ')),
-                  trailing: Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                    licenceBadge({...o, 'vendor_name': v.str('vendor_name')}),
-                    if (o.str('status') != 'Active') const Pill('Inactive', color: AppColors.neutral),
-                    if (_admin)
-                      IconButton(
-                        icon: const Icon(Icons.edit_rounded, size: 18),
-                        onPressed: () async {
-                          final r = await showOperatorDialog(context, operator: {...o, 'vendor_name': v.str('vendor_name')});
-                          if (r != null) _load();
-                        },
-                      ),
-                  ]),
                 ),
             ]),
     );

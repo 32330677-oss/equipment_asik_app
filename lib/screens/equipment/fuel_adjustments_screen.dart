@@ -653,7 +653,7 @@ class _FuelPricesTabState extends State<_FuelPricesTab> with AutomaticKeepAliveC
     final today = Fmt.today();
     return PageBody(onRefresh: _load, maxWidth: 1000, children: [
       PageHeader(title: 'Official fuel prices', subtitle: 'History of the national fuel price, used for the fuel price difference', actions: [
-        if (Auth.I.isAdmin) FilledButton.icon(onPressed: _add, icon: const Icon(Icons.add_rounded), label: const Text('New price')),
+        if (Auth.I.isAdmin || Auth.I.isAccountant) FilledButton.icon(onPressed: _add, icon: const Icon(Icons.add_rounded), label: const Text('New price')),
       ]),
       if (_s.loading && _s.data == null)
         const LoadingView()
@@ -677,7 +677,7 @@ class _FuelPricesTabState extends State<_FuelPricesTab> with AutomaticKeepAliveC
                 DataCell(Text(p.str('price_per_liter'), style: const TextStyle(fontWeight: FontWeight.w800))),
                 DataCell(Text(p.str('note'))),
                 DataCell(Text(p.str('created_by'), style: const TextStyle(color: AppColors.muted, fontSize: 12.5))),
-                DataCell(Auth.I.isAdmin
+                DataCell(Auth.I.isAdmin || Auth.I.isAccountant
                     ? IconButton(tooltip: 'Delete', icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppColors.breakdown), onPressed: () => _delete(p))
                     : const SizedBox()),
               ]),

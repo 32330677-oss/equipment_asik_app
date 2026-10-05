@@ -10,13 +10,15 @@ import '../../widgets/ui.dart';
 /// Create / edit a rate card of one machine, with a live "Test this price" calculator.
 /// Returns true when saved.
 class RateCardFormScreen extends StatefulWidget {
-  const RateCardFormScreen({super.key, required this.machine, this.card, this.copyFrom});
+  const RateCardFormScreen({super.key, required this.machine, this.card, this.copyFrom, this.revise});
   final Json machine;
   final Json? card;
   final Json? copyFrom;
+  /// Change this card FROM A DATE: the card is closed the day before and a new one starts (history kept).
+  final Json? revise;
 
-  static Future<bool?> open(BuildContext context, {required Json machine, Json? card, Json? copyFrom}) =>
-      Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => RateCardFormScreen(machine: machine, card: card, copyFrom: copyFrom)));
+  static Future<bool?> open(BuildContext context, {required Json machine, Json? card, Json? copyFrom, Json? revise}) =>
+      Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => RateCardFormScreen(machine: machine, card: card, copyFrom: copyFrom, revise: revise)));
 
   @override
   State<RateCardFormScreen> createState() => _RateCardFormScreenState();
@@ -56,9 +58,6 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
   String _breakPolicy = 'Deduct';
   String _partial = 'ProRata';
   final _halfDay = TextEditingController();
-  final _monthDays = TextEditingController(text: '26');
-  bool _operatorIncluded = true;
-  final _operatorRate = TextEditingController();
   String _fuel = 'VendorSupplies';
   final _notes = TextEditingController();
   bool _saving = false;
@@ -69,8 +68,8 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
     _SampleRow('Working', gross: 8, brk: 1, breakdown: 2),
     _SampleRow('Standby', gross: 0, brk: 0),
   ];
-  final _assignedDays = TextEditingController(text: '30');
-  final _daysInMonth = TextEditingController(text: '30');
+  final _testMonth = TextEditingController(text: Fmt.thisMonth());
+  final _holidayDays = TextEditingController(text: '0');
   final _fuelLiters = TextEditingController();
   final _fuelPrice = TextEditingController();
   Json? _result;
@@ -78,18 +77,24 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
   bool _testing = false;
 
   bool get _editing => widget.card != null;
+  bool get _revising => widget.revise != null;
 
   @override
   void initState() {
     super.initState();
     _from = Fmt.today();
-    final c = widget.card ?? widget.copyFrom;
+    final c = widget.card ?? widget.revise ?? widget.copyFrom;
     if (c != null) {
       String t(String k) => c.strOrNull(k) == null ? '' : _trim(c.str(k));
       _contract = PickOption(c.intv('vendor_contract_id'), '${c.str('contract_number')}  (${c.str('currency')})');
       if (widget.card != null) {
         _from = c.str('effective_from');
         _to = c.strOrNull('effective_to');
+      }
+      if (widget.revise != null) {
+        final start = c.str('effective_from');
+        final today = Fmt.today();
+        _from = today.compareTo(start) > 0 ? today : Fmt.dateOf(Fmt.parse(start)!.add(const Duration(days: 1)));
       }
       _mode = c.str('billing_mode', 'Hourly');
       _hourly.text = t('hourly_rate');
@@ -106,9 +111,6 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       _breakPolicy = c.str('break_policy', 'Deduct');
       _partial = c.str('daily_partial_rule', 'ProRata');
       _halfDay.text = t('half_day_threshold_hours');
-      _monthDays.text = t('monthly_working_days');
-      _operatorIncluded = c.flag('operator_included');
-      _operatorRate.text = t('operator_daily_rate');
       _fuel = c.str('fuel_policy', 'VendorSupplies');
       _notes.text = c.str('notes');
     }
@@ -174,37 +176,45 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       'daily_rate': _mode == 'Daily' ? numOrNull(_daily) : null,
       'monthly_rate': _mode == 'Monthly' ? numOrNull(_monthly) : null,
       'standard_hours_per_day': numOrNull(_stdHours),
-      'min_billable_hours_per_day': numOrNull(_minHours),
-      'overtime_enabled': _ot,
-      'overtime_threshold_hours': _ot ? numOrNull(_otThreshold) : null,
-      'overtime_rate': _ot ? numOrNull(_otRate) : null,
-      'overtime_multiplier': _ot ? numOrNull(_otMult) : null,
+      'min_billable_hours_per_day': _mode == 'Monthly' ? null : numOrNull(_minHours),
+      // Monthly: overtime is always counted (hours above the hours due), at the month's hourly price unless a price is typed.
+      'overtime_enabled': _mode == 'Monthly' ? true : _ot,
+      'overtime_threshold_hours': _mode != 'Monthly' && _ot ? numOrNull(_otThreshold) : null,
+      'overtime_rate': _mode == 'Monthly' || _ot ? numOrNull(_otRate) : null,
+      'overtime_multiplier': _mode != 'Monthly' && _ot ? numOrNull(_otMult) : null,
       'standby_billable_pct': numOrNull(_standbyPct),
       'breakdown_billable_pct': numOrNull(_breakdownPct),
       'break_policy': _breakPolicy,
       'daily_partial_rule': _mode == 'Daily' ? _partial : null,
       'half_day_threshold_hours': _mode == 'Daily' && _partial == 'HalfDayThreshold' ? numOrNull(_halfDay) : null,
-      'monthly_working_days': _mode == 'Monthly' ? numOrNull(_monthDays) : null,
-      'operator_included': _operatorIncluded,
-      'operator_daily_rate': _operatorIncluded ? null : numOrNull(_operatorRate),
+      // the operator is the vendor's business: never priced by us
+      'operator_included': true,
+      'operator_daily_rate': null,
       'fuel_policy': _fuel,
       'notes': textOrNull(_notes),
     };
     // On edit, nullable fields are sent as null so an old value is cleared; required ones fall back to the stored value.
     const nullable = {'hourly_rate', 'daily_rate', 'monthly_rate', 'min_billable_hours_per_day', 'overtime_threshold_hours', 'overtime_rate',
       'half_day_threshold_hours', 'operator_daily_rate', 'notes'};
-    m.removeWhere((k, v) => v == null && !(_editing && nullable.contains(k)));
+    m.removeWhere((k, v) => v == null && !((_editing || _revising) && nullable.contains(k)));
     return m;
   }
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
-    if (_contract == null) {
+    if (_contract == null && !_revising) {
       showSnack(context, 'Choose the vendor contract.', error: true);
       return;
     }
     setState(() => _saving = true);
     try {
+      if (_revising) {
+        await Api.I.post('/equipment/rate-cards/${widget.revise!.intv('rate_card_id')}/revise', {..._card(), 'effective_from': _from});
+        if (!mounted) return;
+        showSnack(context, 'New prices apply from ${Fmt.date(_from)}. The previous card ends the day before.');
+        Navigator.pop(context, true);
+        return;
+      }
       final body = {..._card(), 'vendor_contract_id': _contract!.value, 'effective_from': _from, if (_to != null) 'effective_to': _to};
       if (_editing) {
         await Api.I.put('/equipment/rate-cards/${widget.card!.intv('rate_card_id')}', body);
@@ -238,8 +248,8 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               'standby_hours': s.status == 'Working' ? numOrNull(s.standby) : null,
             }..removeWhere((k, v) => v == null),
         ],
-        'assigned_days': numOrNull(_assignedDays),
-        'days_in_month': numOrNull(_daysInMonth),
+        'month': _testMonth.text.trim(),
+        'holiday_days': numOrNull(_holidayDays),
         if (liters != null && liters > 0) 'fuel': [{'liters': liters, 'price_per_liter': numOrNull(_fuelPrice) ?? 0}],
       });
       if (!mounted) return;
@@ -259,7 +269,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
     final test = _testCard();
     return Scaffold(
       appBar: AppBar(
-        title: Text('${_editing ? 'Edit' : 'New'} rate card - ${m.str('equipment_code')}'),
+        title: Text('${_revising ? 'Change prices from a date' : _editing ? 'Correct rate card' : 'New rate card'} - ${m.str('equipment_code')}'),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -305,7 +315,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                 valueLabel: _contract?.label,
                 icon: Icons.description_rounded,
                 clearable: false,
-                enabled: !_editing || !(widget.card?.flag('used_in_finalized_payroll') ?? false),
+                enabled: !_revising && (!_editing || !(widget.card?.flag('used_in_finalized_payroll') ?? false)),
                 load: _contractOptions,
                 onChanged: (v) {
                   if (v?.value == '__new') {
@@ -316,10 +326,10 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                 },
               ),
               const SizedBox(),
-              DateField(label: 'Effective from *', value: _from, onChanged: (v) => setState(() => _from = v ?? _from)),
-              DateField(label: 'Effective to (open)', value: _to, clearable: true, onChanged: (v) => setState(() => _to = v)),
+              DateField(label: _revising ? 'New prices apply from *' : 'Effective from *', value: _from, onChanged: (v) => setState(() => _from = v ?? _from)),
+              if (!_revising) DateField(label: 'Effective to (open)', value: _to, clearable: true, onChanged: (v) => setState(() => _to = v)),
             ]),
-          ]),
+          ], hint: _revising ? 'The current card stays as it is until the day before; invoices already issued keep their prices.' : null),
           _section('Billing', [
             SegmentedButton<String>(
               segments: const [
@@ -335,9 +345,9 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               if (_mode == 'Hourly') textField(_hourly, 'Price per hour', number: true, required: true),
               if (_mode == 'Daily') textField(_daily, 'Price per day', number: true, required: true),
               if (_mode == 'Monthly') textField(_monthly, 'Price per month', number: true, required: true),
-              textField(_stdHours, 'Standard hours per day', number: true, required: true, suffix: 'h'),
-              textField(_minHours, 'Minimum billable hours per day', number: true, suffix: 'h', hint: 'empty = no minimum'),
-              if (_mode == 'Monthly') textField(_monthDays, 'Working days in a month', number: true, decimal: false),
+              textField(_stdHours, _mode == 'Monthly' ? 'Working hours per day at the site' : 'Standard hours per day', number: true, required: true, suffix: 'h'),
+              if (_mode != 'Monthly') textField(_minHours, 'Minimum billable hours per day', number: true, suffix: 'h', hint: 'empty = no minimum'),
+              if (_mode == 'Monthly') textField(_otRate, 'Overtime price per hour', number: true, hint: 'empty = the hourly price of the month'),
               if (_mode == 'Daily')
                 Dropdown<String>(label: 'Partial day', value: _partial, width: null, items: const [
                   DropdownMenuItem(value: 'ProRata', child: Text('Pro rata of the hours')),
@@ -346,8 +356,11 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                 ], onChanged: (v) => setState(() => _partial = v ?? _partial)),
               if (_mode == 'Daily' && _partial == 'HalfDayThreshold') textField(_halfDay, 'Half-day threshold', number: true, required: true, suffix: 'h'),
             ]),
-          ], hint: _mode == 'Monthly' ? 'The monthly base is billed pro rata of the days the machine is deployed.' : null),
-          _section('Overtime', [
+          ], hint: _mode == 'Monthly'
+              ? 'Working days of a month = days of the month minus Fridays. Hourly price = monthly price / working days / hours per day. '
+                  'Hours due = working days x hours per day. All hours done = full month; more = overtime; fewer = missing hours deducted.'
+              : null),
+          if (_mode != 'Monthly') _section('Overtime', [
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: _ot,
@@ -372,21 +385,12 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               ], onChanged: (v) => setState(() => _breakPolicy = v ?? _breakPolicy)),
             ]),
           ]),
-          _section('Operator and fuel', [
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _operatorIncluded,
-              onChanged: (v) => setState(() => _operatorIncluded = v),
-              title: const Text('Operator included in the price'),
-            ),
-            FormGrid(children: [
-              if (!_operatorIncluded) textField(_operatorRate, 'Operator price per worked day', number: true),
-              Dropdown<String>(label: 'Fuel', value: _fuel, width: null, items: const [
-                DropdownMenuItem(value: 'VendorSupplies', child: Text('Vendor supplies the fuel')),
-                DropdownMenuItem(value: 'CompanySuppliesDeducted', child: Text('We supply, deducted from vendor')),
-                DropdownMenuItem(value: 'CompanySuppliesFree', child: Text('We supply, free')),
-              ], onChanged: (v) => setState(() => _fuel = v ?? _fuel)),
-            ]),
+          _section('Fuel', [
+            Dropdown<String>(label: 'Fuel', value: _fuel, width: null, items: const [
+              DropdownMenuItem(value: 'VendorSupplies', child: Text('Vendor supplies the fuel')),
+              DropdownMenuItem(value: 'CompanySuppliesDeducted', child: Text('We supply, deducted from vendor')),
+              DropdownMenuItem(value: 'CompanySuppliesFree', child: Text('We supply, free')),
+            ], onChanged: (v) => setState(() => _fuel = v ?? _fuel)),
           ]),
           textField(_notes, 'Notes', maxLines: 2),
         ]),
@@ -426,8 +430,8 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
           ),
           const Divider(),
           FormGrid(columns: 4, children: [
-            if (_mode == 'Monthly') textField(_assignedDays, 'Deployed days', number: true, decimal: false),
-            if (_mode == 'Monthly') textField(_daysInMonth, 'Days in month', number: true, decimal: false),
+            if (_mode == 'Monthly') textField(_testMonth, 'Month (YYYY-MM)'),
+            if (_mode == 'Monthly') textField(_holidayDays, 'Official holidays', number: true, decimal: false),
             if (_fuel == 'CompanySuppliesDeducted') textField(_fuelLiters, 'Fuel litres', number: true),
             if (_fuel == 'CompanySuppliesDeducted') textField(_fuelPrice, 'Price / L', number: true),
           ]),
@@ -448,6 +452,17 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                         style: TextStyle(fontWeight: FontWeight.w700, color: l.dbl('amount') < 0 ? AppColors.breakdown : AppColors.ink)),
                   ),
                 ]),
+              ),
+            for (final mo in r.list('monthly'))
+              Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: AppColors.gold.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
+                child: Text(
+                  '${mo.str('month')}: ${mo.str('working_days')} working days x ${mo.str('hours_per_day')} h = ${mo.dbl('required_hours').toStringAsFixed(2)} h due · '
+                  'done ${mo.dbl('billable_hours').toStringAsFixed(2)} h · hourly price ${mo.dbl('hourly_price').toStringAsFixed(3)}',
+                  style: const TextStyle(fontSize: 12.5),
+                ),
               ),
             const Divider(),
             _total('Gross', r.dbl('gross'), cur),

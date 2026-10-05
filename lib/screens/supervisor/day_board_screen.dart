@@ -320,7 +320,6 @@ class _MachineCard extends StatelessWidget {
                   _fact(Icons.schedule_rounded, '${Fmt.time(att.str('check_in_time'))} → ${att.strOrNull('check_out_time') == null ? 'now' : Fmt.timeOn(att.strOrNull('check_out_time'), recordDate)}'),
                 if (running != null) _fact(Icons.timelapse_rounded, running, color: AppColors.working),
                 if (att.strOrNull('check_out_time') != null) _fact(Icons.timer_rounded, '${Fmt.duration(att.intOrNull('working_minutes'))} work'),
-                if (att.strOrNull('operator_name') != null) _fact(Icons.badge_rounded, att.str('operator_name')),
                 if (att.intv('breakdown_minutes') > 0) _fact(Icons.build_rounded, Fmt.duration(att.intv('breakdown_minutes')), color: AppColors.breakdown),
                 if (att.intv('standby_minutes') > 0) _fact(Icons.pause_rounded, Fmt.duration(att.intv('standby_minutes')), color: AppColors.standby),
                 _fact(Icons.description_rounded, 'row #${att.obj('sheet').str('sheet_row_no')}'),
@@ -348,9 +347,6 @@ class _MachineCard extends StatelessWidget {
                   decoration: BoxDecoration(color: AppColors.breakdown.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
                   child: Text('Office: ${att.str('admin_rejection_notes')}', style: const TextStyle(color: AppColors.breakdown)),
                 ),
-            ] else if (m.strOrNull('default_operator_name') != null) ...[
-              const SizedBox(height: 8),
-              _fact(Icons.badge_rounded, 'Usual operator: ${m.str('default_operator_name')}'),
             ],
             if (actions.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -557,7 +553,6 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
           ),
         SectionCard(child: Column(children: [
           InfoRow('Day', a.str('day_status'), width: 120),
-          InfoRow('Operator', a.str('operator_name', '-'), width: 120),
           InfoRow('Start / end', a.strOrNull('check_in_time') == null ? '-' : '${Fmt.time(a.str('check_in_time'))} → ${Fmt.timeOn(a.strOrNull('check_out_time'), date)}', width: 120),
           InfoRow('Work time', Fmt.duration(a.intOrNull('working_minutes')), width: 120),
           InfoRow('Meter', '${a.str('meter_start', '-')} → ${a.str('meter_end', '-')}', width: 120),

@@ -475,6 +475,20 @@ class _ItemTile extends StatelessWidget {
           ),
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
           children: [
+            for (final mo in (item.list('monthly_calc').isNotEmpty ? item.list('monthly_calc') : item.obj('rate_snapshot').list('monthly_calc')))
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: AppColors.gold.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
+                child: Text(
+                  '${mo.str('month')}: ${mo.str('deployed_working_days')} of ${mo.str('working_days')} working days'
+                  '${mo.intv('holiday_days') > 0 ? ' (${mo.str('holiday_days')} holidays)' : ''} x ${mo.str('hours_per_day')} h = ${mo.dbl('required_hours').toStringAsFixed(2)} h due  ·  '
+                  'done ${mo.dbl('billable_hours').toStringAsFixed(2)} h  ·  hourly price ${mo.dbl('hourly_price').toStringAsFixed(3)}  ·  '
+                  '${mo.dbl('overtime_hours') > 0 ? '+${mo.dbl('overtime_hours').toStringAsFixed(2)} h overtime' : mo.dbl('missing_hours') > 0 ? '-${mo.dbl('missing_hours').toStringAsFixed(2)} h missing' : 'hours complete'}',
+                  style: const TextStyle(fontSize: 12.5),
+                ),
+              ),
             Table(
               columnWidths: const {0: FlexColumnWidth(2.2), 1: FlexColumnWidth(1.2), 2: FlexColumnWidth(1.2), 3: FlexColumnWidth(1.4)},
               children: [
@@ -490,7 +504,7 @@ class _ItemTile extends StatelessWidget {
                         child: Text('${_lineName(l.str('line_type'))}${l.strOrNull('note') == null ? '' : '\n${l.str('note')}'}', style: const TextStyle(fontSize: 13)),
                       ),
                       _Td('${Fmt.num2(l.dblOrNull('quantity'))} ${l.str('unit')}'),
-                      _Td(l.str('line_type') == 'FuelPriceDifference' || l.str('line_type') == 'Fuel'
+                      _Td(['FuelPriceDifference', 'Fuel', 'HoursShortfall', 'Overtime'].contains(l.str('line_type'))
                           ? (l.dblOrNull('unit_price') ?? 0).toStringAsFixed(3)
                           : Fmt.num2(l.dblOrNull('unit_price'))),
                       _Td(Fmt.money(l.dblOrNull('amount'), cur), color: l.dbl('amount') < 0 ? AppColors.breakdown : AppColors.ink, bold: true),
@@ -528,6 +542,7 @@ String _lineName(String t) {
     'AbsenceDeduction': 'Absence deduction',
     'BreakdownDeduction': 'Breakdown deduction',
     'FuelPriceDifference': 'Fuel price difference',
+    'HoursShortfall': 'Missing hours (below the monthly hours due)',
   };
   return names[t] ?? t.replaceAllMapped(RegExp(r'(?<=[a-z])([A-Z])'), (m) => ' ${m[1]!.toLowerCase()}');
 }

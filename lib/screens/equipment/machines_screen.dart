@@ -96,7 +96,7 @@ class _MachinesScreenState extends State<MachinesScreen> {
             DropdownMenuItem(value: 'true', child: Text('On a site')),
             DropdownMenuItem(value: 'false', child: Text('Idle')),
           ], onChanged: (v) { _deployed = v; _load(); }),
-          if (Auth.I.isAdmin)
+          if (Auth.I.isAdmin || Auth.I.isAccountant)
             FilledButton.icon(
               onPressed: () async {
                 final m = await showMachineDialog(context);
@@ -225,7 +225,8 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
   Uint8List? _photo;
   List<Json> _cards = [];
 
-  bool get _admin => Auth.I.isAdmin;
+  /// Admin and Accountant manage machines, deployments, rate cards and fuel terms.
+  bool get _admin => Auth.I.isAdmin || Auth.I.isAccountant;
 
   @override
   void initState() {
@@ -285,7 +286,6 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
     var shift = 'Day';
     var from = Fmt.today();
     String? to;
-    PickOption? op;
     final notes = TextEditingController();
     final m = _m!;
     final r = await showFormDialog<Map<String, dynamic>>(
@@ -296,7 +296,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
         if (site == null) throw ApiException(null, 'VALIDATION', 'Choose the site.');
         return asJson((await Api.I.request('POST', '/equipment/deployments', body: {
           'equipment_id': widget.id, 'site_id': site!.value, 'shift_type': shift, 'assigned_date': from,
-          if (to != null) 'unassigned_date': to, if (op != null) 'default_operator_id': op!.value, if (notes.text.trim().isNotEmpty) 'notes': notes.text.trim(),
+          if (to != null) 'unassigned_date': to, if (notes.text.trim().isNotEmpty) 'notes': notes.text.trim(),
         })));
       },
       body: (ctx, set) => FormGrid(children: [
@@ -307,7 +307,6 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
         ], onChanged: (x) => set(() => shift = x ?? shift)),
         DateField(label: 'First day *', value: from, onChanged: (x) => set(() => from = x ?? from)),
         DateField(label: 'Last day (open)', value: to, clearable: true, onChanged: (x) => set(() => to = x)),
-        PickerField(label: 'Default operator', valueLabel: op?.label, icon: Icons.badge_rounded, load: () => Lookups.operators(m.intv('vendor_id')), onChanged: (x) => set(() => op = x)),
         textField(notes, 'Notes'),
       ]),
     );
@@ -369,14 +368,6 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
       showSnack(context, 'Transferred.');
       _load();
     }
-  }
-
-  Future<void> _operator(Json d) async {
-    final options = await Lookups.operators(_m!.intv('vendor_id'));
-    if (!mounted) return;
-    final p = await pickFromList(context, 'Default operator', [PickOption(0, 'No default operator'), ...options]);
-    if (p == null) return;
-    _do(() => Api.I.patch('/equipment/deployments/${d.intv('eq_assignment_id')}', {'default_operator_id': p.value == 0 ? null : p.value}), 'Saved.');
   }
 
   // ------------------------------------------------------------- rate cards
@@ -549,7 +540,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                           if (cancelled(d)) const Pill('Cancelled', color: AppColors.neutral),
                         ]),
                         Text('${Fmt.date(d.str('assigned_date'))}  →  ${d.strOrNull('unassigned_date') == null ? 'open' : Fmt.date(d.str('unassigned_date'))}'
-                            '${d.strOrNull('default_operator_name') == null ? '' : '  ·  operator ${d.str('default_operator_name')}'}',
+                            '',
                             style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
                       ]),
                     ),
@@ -558,10 +549,8 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                         onSelected: (v) {
                           if (v == 'end') _end(d);
                           if (v == 'transfer') _transfer(d);
-                          if (v == 'operator') _operator(d);
                         },
                         itemBuilder: (_) => [
-                          const PopupMenuItem(value: 'operator', child: ListTile(leading: Icon(Icons.badge_rounded), title: Text('Default operator'))),
                           if (current(d)) const PopupMenuItem(value: 'transfer', child: ListTile(leading: Icon(Icons.swap_horiz_rounded), title: Text('Transfer to another site'))),
                           const PopupMenuItem(value: 'end', child: ListTile(leading: Icon(Icons.logout_rounded), title: Text('End deployment'))),
                         ],
@@ -611,14 +600,16 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                         if (_admin)
                           PopupMenuButton<String>(
                             onSelected: (v) async {
-                              if (v == 'edit' || v == 'copy') {
-                                final ok = await RateCardFormScreen.open(context, machine: m, card: v == 'edit' ? c : null, copyFrom: v == 'copy' ? c : null);
+                              if (v == 'edit' || v == 'copy' || v == 'revise') {
+                                final ok = await RateCardFormScreen.open(context, machine: m, card: v == 'edit' ? c : null, copyFrom: v == 'copy' ? c : null, revise: v == 'revise' ? c : null);
                                 if (ok == true) _load();
                               }
                               if (v == 'close') _closeCard(c);
                             },
                             itemBuilder: (_) => [
-                              if (!locked) const PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit_rounded), title: Text('Edit'))),
+                              if (c.strOrNull('effective_to') == null || c.str('effective_to').compareTo(today) >= 0)
+                                const PopupMenuItem(value: 'revise', child: ListTile(leading: Icon(Icons.event_repeat_rounded), title: Text('Change from a date'))),
+                              if (!locked) const PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit_rounded), title: Text('Correct (no history)'))),
                               const PopupMenuItem(value: 'copy', child: ListTile(leading: Icon(Icons.copy_rounded), title: Text('New card from this one'))),
                               const PopupMenuItem(value: 'close', child: ListTile(leading: Icon(Icons.event_busy_rounded), title: Text('Close on a date'))),
                             ],
@@ -629,15 +620,16 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                           style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
                       const SizedBox(height: 8),
                       Wrap(spacing: 14, runSpacing: 4, children: [
-                        kv('Std h/day', c.str('standard_hours_per_day')),
-                        if (c.strOrNull('min_billable_hours_per_day') != null) kv('Min h/day', c.str('min_billable_hours_per_day')),
-                        kv('Overtime', c.flag('overtime_enabled') ? (c.strOrNull('overtime_rate') != null ? c.str('overtime_rate') : '×${c.str('overtime_multiplier')}') : 'no'),
+                        kv(c.str('billing_mode') == 'Monthly' ? 'Hours per day' : 'Std h/day', c.str('standard_hours_per_day')),
+                        if (c.strOrNull('min_billable_hours_per_day') != null && c.str('billing_mode') != 'Monthly') kv('Min h/day', c.str('min_billable_hours_per_day')),
+                        if (c.str('billing_mode') == 'Monthly')
+                          kv('Overtime', c.strOrNull('overtime_rate') != null ? '${c.str('overtime_rate')} / h' : 'month hourly price')
+                        else
+                          kv('Overtime', c.flag('overtime_enabled') ? (c.strOrNull('overtime_rate') != null ? c.str('overtime_rate') : '×${c.str('overtime_multiplier')}') : 'no'),
                         kv('Standby', '${c.str('standby_billable_pct')}%'),
                         kv('Breakdown', '${c.str('breakdown_billable_pct')}%'),
                         kv('Breaks', c.str('break_policy')),
                         if (c.str('billing_mode') == 'Daily') kv('Partial day', c.str('daily_partial_rule')),
-                        if (c.str('billing_mode') == 'Monthly') kv('Days/month', c.str('monthly_working_days')),
-                        kv('Operator', c.flag('operator_included') ? 'included' : c.str('operator_daily_rate', 'not included')),
                         kv('Fuel', c.str('fuel_policy').replaceAll('CompanySupplies', 'We supply, ').replaceAll('VendorSupplies', 'Vendor')),
                       ]),
                     ]),

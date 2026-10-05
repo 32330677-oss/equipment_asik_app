@@ -241,6 +241,29 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
     }
   }
 
+  /// Monthly machines: the Admin/Accountant give the standby hours paid for this row (no %), max = hours per day.
+  Future<void> _standbyHours() async {
+    final r = _r!;
+    final sc = r.obj('standby_credit');
+    final max = sc.dblOrNull('max_hours') ?? 0;
+    final cur = r.intOrNull('standby_credit_minutes');
+    final v = await promptText(context, 'Standby hours to pay (max ${max.toStringAsFixed(2)} h)',
+        label: 'Hours (0 to ${max.toStringAsFixed(2)}; empty = not decided)', initial: cur == null ? '' : (cur / 60).toStringAsFixed(2), required: false, maxLines: 1);
+    if (v == null || !mounted) return;
+    if (v.isEmpty) {
+      await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}/standby-credit', {'hours': null}), 'Cleared.');
+      return;
+    }
+    final hours = double.tryParse(v.replaceAll(',', '.'));
+    if (hours == null || hours < 0 || hours > max) {
+      showError(context, ApiException(null, 'VALIDATION', 'Type a number of hours between 0 and ${max.toStringAsFixed(2)}.'));
+      return;
+    }
+    final note = await promptText(context, 'Why these hours? (optional)', label: 'Note', required: false);
+    if (note == null || !mounted) return;
+    await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}/standby-credit', {'hours': hours, if (note.isNotEmpty) 'note': note}), 'Standby hours saved.');
+  }
+
   Future<void> _edit({required bool correction}) async {
     final r = _r!;
     String? inT = r.strOrNull('check_in_time');
@@ -280,6 +303,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
   Widget build(BuildContext context) {
     final r = _r;
     final admin = Auth.I.isAdmin;
+    final canGiveStandby = (Auth.I.isAdmin || Auth.I.isAccountant) && (r?.obj('standby_credit').flag('applies') ?? false);
     return SafeArea(
         child: SizedBox(
           height: MediaQuery.of(context).size.height * 0.85,
@@ -340,6 +364,22 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                             ),
                         ])),
                       if (r.list('downtime').isNotEmpty) const SizedBox(height: 12),
+                      if (canGiveStandby)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(color: AppColors.standby.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.standby.withValues(alpha: 0.3))),
+                          child: Row(children: [
+                            const Icon(Icons.hourglass_bottom_rounded, color: AppColors.standby),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(r.intOrNull('standby_credit_minutes') == null
+                                  ? 'Monthly machine with standby: decide how many hours to pay (needed before payroll).'
+                                  : 'Standby hours paid: ${Fmt.hoursFromMinutes(r.intv('standby_credit_minutes'))} h${r.strOrNull('standby_credit_note') == null ? '' : ' - ${r.str('standby_credit_note')}'}'),
+                            ),
+                            TextButton(onPressed: _standbyHours, child: Text(r.intOrNull('standby_credit_minutes') == null ? 'Set hours' : 'Change')),
+                          ]),
+                        ),
                       if (admin)
                         Wrap(spacing: 8, runSpacing: 8, children: [
                           OutlinedButton.icon(onPressed: () => _edit(correction: false), icon: const Icon(Icons.edit_rounded), label: const Text('Edit')),

@@ -377,14 +377,17 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
           ]),
           _section('Standby, breakdown and breaks', [
             FormGrid(children: [
-              textField(_standbyPct, 'Standby billable', number: true, required: true, suffix: '%'),
+              // monthly machines: no standby %; the accountant gives the standby hours on each row (Attendance review)
+              if (_mode != 'Monthly') textField(_standbyPct, 'Standby billable', number: true, required: true, suffix: '%'),
               textField(_breakdownPct, 'Breakdown billable', number: true, required: true, suffix: '%'),
               Dropdown<String>(label: 'Breaks', value: _breakPolicy, width: null, items: const [
                 DropdownMenuItem(value: 'Deduct', child: Text('Deducted from hours')),
                 DropdownMenuItem(value: 'Paid', child: Text('Paid (not deducted)')),
               ], onChanged: (v) => setState(() => _breakPolicy = v ?? _breakPolicy)),
             ]),
-          ]),
+          ], hint: _mode == 'Monthly'
+              ? 'Standby of a monthly machine: no %. On each standby row the Admin or Accountant gives the hours to pay (at most the hours per day); payroll waits until they are set.'
+              : null),
           _section('Fuel', [
             Dropdown<String>(label: 'Fuel', value: _fuel, width: null, items: const [
               DropdownMenuItem(value: 'VendorSupplies', child: Text('Vendor supplies the fuel')),

@@ -54,7 +54,10 @@ class Auth extends ChangeNotifier {
   }
 
   Future<void> changePassword(String current, String next) async {
-    await Api.I.post('/auth/change-password', {'current_password': current, 'new_password': next});
+    final d = asJson(await Api.I.post('/auth/change-password', {'current_password': current, 'new_password': next}));
+    // the server ends every old session; keep this device signed in with the new token
+    final t = d.strOrNull('token');
+    if (t != null && t.isNotEmpty) await Api.I.setToken(t);
     await refreshMe();
   }
 

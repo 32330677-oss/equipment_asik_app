@@ -20,6 +20,7 @@ const _blockerHelp = {
   'PAPER_NOT_MATCHED': 'Upload the signed sheet and reconcile it in Paper sheets.',
   'NO_RATE_CARD': 'Add a rate card for these dates on the machine page.',
   'FUEL_UNPRICED': 'Enter the price per litre in Fuel & adjustments.',
+  'STANDBY_HOURS_NOT_SET': 'Monthly machine standby: open the row in Attendance review and set the standby hours to pay.',
   'IN_OTHER_BATCH': 'Already paid in another batch; they are skipped.',
   'FUEL_PRICE_MISSING': 'Add the official fuel price for these dates in Fuel & adjustments > Fuel prices.',
   'SCAN_MISSING': 'Information only: the accountant must upload these signed sheets (Paper sheets) before the Admin finalizes.',

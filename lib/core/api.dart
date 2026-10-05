@@ -44,7 +44,9 @@ class Api {
         if (status == 401 && !path.contains('/auth/login')) {
           onSessionEnded?.call(code == 'TOKEN_EXPIRED'
               ? 'Your session has expired. Please sign in again.'
-              : 'Please sign in again.');
+              : code == 'TOKEN_REVOKED'
+                  ? 'Your password was changed. Please sign in again.'
+                  : 'Please sign in again.');
         } else if (status == 403 && code == 'PASSWORD_CHANGE_REQUIRED') {
           onPasswordChangeRequired?.call();
         }

@@ -5,8 +5,8 @@ import '../../core/auth.dart';
 import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
+import '../../widgets/file_versions.dart';
 import '../../widgets/lookups.dart';
-import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 
 /// Fuel issued to the machines, manual adjustments, and corrections waiting for an adjustment.
@@ -161,15 +161,10 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
   }
 
   Future<void> _upload(Json r) async {
-    final f = await pickOneFile(label: 'Receipt', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp']);
-    if (f == null) return;
-    try {
-      await Api.I.upload('/equipment/fuel-issues/${r.intv('fuel_issue_id')}/receipt', [f]);
-      if (mounted) showSnack(context, 'Receipt uploaded.');
-      _load();
-    } catch (e) {
-      if (mounted) showError(context, e);
-    }
+    final ok = await uploadFileVersion(context,
+        basePath: '/equipment/fuel-issues/${r.intv('fuel_issue_id')}/receipt', hasFile: r.flag('has_receipt'), label: 'Receipt',
+        extensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp']);
+    if (ok) _load();
   }
 
   @override
@@ -253,10 +248,18 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
                   DataCell(Text(r.strOrNull('price_per_liter') == null ? '' : Fmt.num2(r.dbl('liters') * r.dbl('price_per_liter')))),
                   DataCell(r.flag('has_receipt')
                       ? IconButton(
-                          tooltip: 'View receipt',
+                          tooltip: 'Receipt (all versions)',
                           icon: const Icon(Icons.receipt_long_rounded, color: AppColors.navy),
-                          onPressed: () => viewStoredFile(context, title: 'Receipt ${r.str('receipt_number')}', fileName: 'fuel-receipt-${r.str('fuel_issue_id')}',
-                              load: () => Api.I.getBytes('/equipment/fuel-issues/${r.intv('fuel_issue_id')}/receipt')),
+                          onPressed: () async {
+                            final changed = await showFileVersions(context,
+                                title: 'Receipt ${r.str('receipt_number')}',
+                                basePath: '/equipment/fuel-issues/${r.intv('fuel_issue_id')}/receipt',
+                                listPath: '/equipment/fuel-issues/${r.intv('fuel_issue_id')}/receipts',
+                                fileName: 'fuel-receipt-${r.str('fuel_issue_id')}',
+                                canUpload: !r.flag('is_cancelled'),
+                                extensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp']);
+                            if (changed) _load();
+                          },
                         )
                       : TextButton(onPressed: r.flag('is_cancelled') ? null : () => _upload(r), child: Text(r.strOrNull('receipt_number') == null ? 'Upload' : '${r.str('receipt_number')} ↑'))),
                   DataCell(Text(r.str('issued_by'), style: const TextStyle(color: AppColors.muted, fontSize: 12.5))),
@@ -434,6 +437,8 @@ Future<Json?> showAdjustmentDialog(BuildContext context, {PickOption? machine, P
 }
 
 // ================================================================= corrections
+/// Official corrections of rows already paid by a finalized payroll.
+/// Admin requests → Accountant reviews (may set the amount) → Admin approves (debit / credit note) or returns it.
 class _CorrectionsTab extends StatefulWidget {
   const _CorrectionsTab();
   @override
@@ -442,7 +447,7 @@ class _CorrectionsTab extends StatefulWidget {
 
 class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliveClientMixin {
   final _s = Loadable<List<Json>>();
-  String? _status = 'Open';
+  String? _status = Auth.I.isAccountant ? 'Requested' : 'Reviewed';
 
   @override
   bool get wantKeepAlive => true;
@@ -456,13 +461,219 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
   Future<void> _load() async {
     setState(() { _s.loading = true; _s.error = null; });
     try {
-      _s.data = await Api.I.getList('/equipment/admin/corrections', query: {'status': _status});
+      _s.data = await Api.I.getList('/equipment/admin/corrections', query: {'request_status': _status});
     } catch (e) {
       _s.error = e;
     }
     if (mounted) setState(() => _s.loading = false);
   }
 
+  String _id(Json c) => c.str('correction_id');
+
+  Future<void> _act(Json c, String action, Map<String, dynamic> body, String done) async {
+    try {
+      await Api.I.patch('/equipment/admin/corrections/${_id(c)}/$action', body);
+      if (mounted) showSnack(context, done);
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  /// Accountant (or Admin) review: note + optional amount different from the computed one.
+  Future<void> _review(Json c) async {
+    final detail = c.obj('delta_detail');
+    final auto = detail.isEmpty ? c.strOrNull('delta_amount') != null : detail.flag('auto');
+    final note = TextEditingController();
+    final amount = TextEditingController(text: c.strOrNull('amount_override') ?? '');
+    final why = TextEditingController(text: c.strOrNull('override_reason') ?? '');
+    await showFormDialog<bool>(context,
+        title: 'Review correction #${_id(c)}',
+        saveLabel: 'Send to Admin',
+        body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(auto ? 'Computed difference: ${Fmt.money2(c.strOrNull('delta_amount'), c.strOrNull('currency'))}' : 'This row was not paid by a finalized batch: enter the amount to settle (0 if none).',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 12),
+              TextFormField(controller: note, maxLines: 3, decoration: const InputDecoration(labelText: 'Review note *'),
+                  validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: amount,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                decoration: InputDecoration(labelText: auto ? 'Different amount (optional, + vendor gets more, − less)' : 'Amount to settle *'),
+                validator: (v) {
+                  final t = (v ?? '').trim();
+                  if (t.isEmpty) return auto ? null : 'Required';
+                  return double.tryParse(t) == null ? 'Number' : null;
+                },
+              ),
+              const SizedBox(height: 12),
+              TextFormField(controller: why, maxLines: 2, decoration: const InputDecoration(labelText: 'Why this amount (needed when you enter one)'),
+                  validator: (v) => amount.text.trim().isNotEmpty && (v ?? '').trim().isEmpty ? 'Explain the amount' : null),
+            ]),
+        onSave: () async {
+          final t = amount.text.trim();
+          await Api.I.patch('/equipment/admin/corrections/${_id(c)}/review', {
+            'note': note.text.trim(),
+            'amount_override': t.isEmpty ? null : double.parse(t),
+            if (t.isNotEmpty) 'override_reason': why.text.trim(),
+          });
+          return true;
+        }).then((ok) {
+      if (ok == true) {
+        if (mounted) showSnack(context, 'Reviewed — sent to the Admin for approval.');
+        _load();
+      }
+    });
+  }
+
+  Future<void> _approve(Json c) async {
+    final amt = c.strOrNull('amount_override') ?? c.strOrNull('delta_amount');
+    final n = double.tryParse(amt ?? '') ?? 0;
+    final what = n == 0 ? 'no money difference (no note is issued)' : '${n > 0 ? 'a debit note' : 'a credit note'} of ${Fmt.money(n.abs(), c.strOrNull('currency'))}';
+    final note = await promptText(context, 'Approve correction #${_id(c)}', label: 'Note (optional) — this applies the change and issues $what', required: false, confirm: 'Approve');
+    if (note == null) return;
+    _act(c, 'approve', {'note': note}, 'Correction approved.');
+  }
+
+  Future<void> _return(Json c) async {
+    final note = await promptText(context, 'Return correction #${_id(c)} to the accountant', label: 'What should be checked again', confirm: 'Return');
+    if (note == null) return;
+    _act(c, 'return', {'note': note}, 'Returned to the accountant.');
+  }
+
+  Future<void> _cancel(Json c) async {
+    final note = await promptText(context, 'Cancel correction #${_id(c)}', label: 'Reason', confirm: 'Cancel correction');
+    if (note == null) return;
+    _act(c, 'cancel', {'note': note}, 'Correction cancelled.');
+  }
+
+  Future<void> _history(Json c) async {
+    try {
+      final d = Map<String, dynamic>.from(await Api.I.get('/equipment/admin/corrections/${_id(c)}'));
+      if (!mounted) return;
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Correction #${_id(c)} — history'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                for (final e in d.list('events'))
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.history_rounded, size: 18),
+                    title: Text('${e.str('action')} — ${e.str('user_name')}', style: const TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: Text('${Fmt.date(e.str('created_at'))}${e.strOrNull('note') == null ? '' : '\n${e.str('note')}'}'),
+                  ),
+              ]),
+            ),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+        ),
+      );
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  Color _color(String st) => switch (st) {
+        'Requested' => AppColors.standby,
+        'Reviewed' => AppColors.info,
+        'Approved' => AppColors.working,
+        _ => AppColors.muted,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final rows = _s.data ?? <Json>[];
+    final admin = Auth.I.isAdmin;
+    final reviewer = Auth.I.isAccountant || admin;
+    return PageBody(onRefresh: _load, maxWidth: 1100, children: [
+      PageHeader(
+          title: 'Corrections',
+          subtitle: 'Changes to rows already paid by a finalized payroll. The Admin requests, the accountant reviews, the Admin approves; approval issues a debit / credit note.',
+          actions: [
+            Dropdown<String?>(label: 'Status', value: _status, width: 150, items: const [
+              DropdownMenuItem(value: null, child: Text('All')),
+              DropdownMenuItem(value: 'Requested', child: Text('Requested')),
+              DropdownMenuItem(value: 'Reviewed', child: Text('Reviewed')),
+              DropdownMenuItem(value: 'Approved', child: Text('Approved')),
+              DropdownMenuItem(value: 'Cancelled', child: Text('Cancelled')),
+            ], onChanged: (v) { _status = v; _load(); }),
+          ]),
+      if (_s.loading && _s.data == null)
+        const LoadingView()
+      else if (_s.error != null)
+        ErrorView(error: _s.error!, onRetry: _load)
+      else if (rows.isEmpty)
+        const Card(child: EmptyView(text: 'Nothing here.', icon: Icons.verified_rounded))
+      else
+        for (final c in rows) _card(c, admin: admin, reviewer: reviewer),
+    ]);
+  }
+
+  Widget _card(Json c, {required bool admin, required bool reviewer}) {
+    final st = c.str('request_status');
+    final cur = c.strOrNull('currency');
+    final legacyOpen = st == 'Approved' && c.str('adjustment_status') == 'Open';
+    const small = TextStyle(color: AppColors.muted, fontSize: 13);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Text('#${_id(c)} · ${c.str('equipment_code')} · ${c.str('site_code')} · ${Fmt.dayLabel(c.str('record_date'))}',
+                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+            ),
+            if (c.strOrNull('locked_batch_id') != null) ...[Pill('Batch #${c.str('locked_batch_id')}', color: AppColors.info), const SizedBox(width: 6)],
+            if (c.intv('return_count') > 0) ...[Pill('Returned ×${c.str('return_count')}', color: AppColors.breakdown), const SizedBox(width: 6)],
+            Pill(st, color: _color(st)),
+          ]),
+          const SizedBox(height: 6),
+          Text('${c.str('reason')}  —  ${c.str('corrected_by')}, ${Fmt.date(c.str('corrected_at'))}', style: small),
+          const SizedBox(height: 10),
+          _Diff(before: c.obj('original_values'), after: c.obj('corrected_values')),
+          const SizedBox(height: 10),
+          Wrap(spacing: 18, runSpacing: 4, children: [
+            if (c.strOrNull('delta_amount') != null) Text('Computed: ${Fmt.money2(c.strOrNull('delta_amount'), cur)}', style: const TextStyle(fontWeight: FontWeight.w700)),
+            if (c.strOrNull('amount_override') != null)
+              Text('Accountant amount: ${Fmt.money2(c.strOrNull('amount_override'), cur)} (${c.str('override_reason')})', style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.info)),
+            if (c.strOrNull('reviewed_by') != null) Text('Reviewed by ${c.str('reviewed_by')}: ${c.str('review_note')}', style: small),
+            if (c.strOrNull('note_invoice_no') != null)
+              Text('${c.str('note_kind') == 'CreditNote' ? 'Credit' : 'Debit'} note ${c.str('note_invoice_no')}', style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.working)),
+            if (st == 'Approved' && c.strOrNull('approved_by') != null) Text('Approved by ${c.str('approved_by')}', style: small),
+          ]),
+          if (c.strOrNull('resolution_note') != null) ...[
+            const SizedBox(height: 6),
+            Text('Resolution: ${c.str('resolution_note')}${c.strOrNull('resolved_adjustment_id') == null ? '' : ' (adjustment #${c.str('resolved_adjustment_id')})'}',
+                style: const TextStyle(color: AppColors.working, fontSize: 13)),
+          ],
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            if (st == 'Requested' && reviewer) FilledButton.icon(onPressed: () => _review(c), icon: const Icon(Icons.fact_check_rounded), label: const Text('Review')),
+            if (st == 'Reviewed' && admin) ...[
+              FilledButton.icon(onPressed: () => _approve(c), icon: const Icon(Icons.verified_rounded), label: const Text('Approve')),
+              OutlinedButton.icon(onPressed: () => _return(c), icon: const Icon(Icons.undo_rounded), label: const Text('Return to accountant')),
+            ],
+            if ((st == 'Requested' || st == 'Reviewed') && admin) TextButton(onPressed: () => _cancel(c), child: const Text('Cancel')),
+            if (legacyOpen && admin) ...[
+              FilledButton.icon(onPressed: () => _resolve(c, withAdjustment: true), icon: const Icon(Icons.add_card_rounded), label: const Text('Create adjustment & resolve')),
+              OutlinedButton(onPressed: () => _resolve(c, withAdjustment: false), child: const Text('Resolve without money')),
+            ],
+            TextButton.icon(onPressed: () => _history(c), icon: const Icon(Icons.history_rounded, size: 18), label: const Text('History')),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  /// Older corrections (before the approval flow) are still settled by hand.
   Future<void> _resolve(Json c, {required bool withAdjustment}) async {
     int? adjustmentId;
     if (withAdjustment) {
@@ -478,69 +689,7 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
     final note = await promptText(context, 'Resolve correction #${c.str('correction_id')}',
         label: 'Resolution note', initial: withAdjustment ? 'Settled with adjustment #$adjustmentId' : 'No money difference', confirm: 'Resolve');
     if (note == null) return;
-    try {
-      await Api.I.patch('/equipment/admin/corrections/${c.intv('correction_id')}/resolve', {'resolution_note': note, 'adjustment_id': adjustmentId});
-      if (mounted) showSnack(context, 'Correction resolved.');
-      _load();
-    } catch (e) {
-      if (mounted) showError(context, e);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    final rows = _s.data ?? <Json>[];
-    return PageBody(onRefresh: _load, maxWidth: 1100, children: [
-      PageHeader(title: 'Corrections', subtitle: 'Changes made after a payroll was finalized. Settle each one with an adjustment or close it.', actions: [
-        Dropdown<String?>(label: 'Status', value: _status, width: 140, items: const [
-          DropdownMenuItem(value: null, child: Text('All')),
-          DropdownMenuItem(value: 'Open', child: Text('Open')),
-          DropdownMenuItem(value: 'Resolved', child: Text('Resolved')),
-        ], onChanged: (v) { _status = v; _load(); }),
-      ]),
-      if (_s.loading && _s.data == null)
-        const LoadingView()
-      else if (_s.error != null)
-        ErrorView(error: _s.error!, onRetry: _load)
-      else if (rows.isEmpty)
-        const Card(child: EmptyView(text: 'No correction to settle.', icon: Icons.verified_rounded))
-      else
-        for (final c in rows)
-          Card(
-            margin: const EdgeInsets.only(bottom: 10),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Expanded(
-                    child: Text('${c.str('equipment_code')} · ${c.str('site_code')} · ${Fmt.dayLabel(c.str('record_date'))}',
-                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
-                  ),
-                  Pill('Batch #${c.str('locked_batch_id')}', color: AppColors.info),
-                  const SizedBox(width: 6),
-                  Pill(c.str('adjustment_status'), color: c.str('adjustment_status') == 'Open' ? AppColors.standby : AppColors.working),
-                ]),
-                const SizedBox(height: 6),
-                Text('${c.str('reason')}  —  ${c.str('corrected_by')}, ${Fmt.date(c.str('corrected_at'))}', style: const TextStyle(color: AppColors.muted, fontSize: 13)),
-                const SizedBox(height: 10),
-                _Diff(before: c.obj('original_values'), after: c.obj('corrected_values')),
-                if (c.strOrNull('resolution_note') != null) ...[
-                  const SizedBox(height: 8),
-                  Text('Resolution: ${c.str('resolution_note')}${c.strOrNull('resolved_adjustment_id') == null ? '' : ' (adjustment #${c.str('resolved_adjustment_id')})'}',
-                      style: const TextStyle(color: AppColors.working, fontSize: 13)),
-                ],
-                if (c.str('adjustment_status') == 'Open') ...[
-                  const SizedBox(height: 10),
-                  Wrap(spacing: 8, children: [
-                    FilledButton.icon(onPressed: () => _resolve(c, withAdjustment: true), icon: const Icon(Icons.add_card_rounded), label: const Text('Create adjustment & resolve')),
-                    OutlinedButton(onPressed: () => _resolve(c, withAdjustment: false), child: const Text('Resolve without money')),
-                  ]),
-                ],
-              ]),
-            ),
-          ),
-    ]);
+    _act(c, 'resolve', {'resolution_note': note, 'adjustment_id': adjustmentId}, 'Correction resolved.');
   }
 }
 

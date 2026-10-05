@@ -16,7 +16,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   static const _groups = <String, List<String>>{
     'Paper sheets & payroll': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_default_currency'],
-    'Attendance checks': ['eq_meter_tolerance_pct', 'eq_long_session_review_hours', 'week_gate_enabled', 'week_start_day'],
+    'Attendance checks': ['eq_meter_tolerance_pct', 'eq_long_session_review_hours', 'week_gate_enabled', 'week_start_day', 'eq_shift_continuity_minutes'],
     'General': ['company_name', 'app_time_zone', 'eq_live_refresh_seconds'],
   };
   static const _titles = <String, String>{
@@ -32,6 +32,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'company_name': 'Company name on documents',
     'app_time_zone': 'Business time zone',
     'eq_live_refresh_seconds': 'Live board refresh (seconds)',
+    'eq_shift_continuity_minutes': 'Continuous shifts: max gap (minutes)',
   };
   static const _days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 

@@ -58,6 +58,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
   String _breakPolicy = 'Deduct';
   String _partial = 'ProRata';
   final _halfDay = TextEditingController();
+  final _secondShift = TextEditingController(text: '0');
   String _fuel = 'VendorSupplies';
   final _notes = TextEditingController();
   bool _saving = false;
@@ -111,6 +112,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       _breakPolicy = c.str('break_policy', 'Deduct');
       _partial = c.str('daily_partial_rule', 'ProRata');
       _halfDay.text = t('half_day_threshold_hours');
+      _secondShift.text = t('second_shift_pct').isEmpty ? '0' : t('second_shift_pct');
       _fuel = c.str('fuel_policy', 'VendorSupplies');
       _notes.text = c.str('notes');
     }
@@ -187,6 +189,8 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       'break_policy': _breakPolicy,
       'daily_partial_rule': _mode == 'Daily' ? _partial : null,
       'half_day_threshold_hours': _mode == 'Daily' && _partial == 'HalfDayThreshold' ? numOrNull(_halfDay) : null,
+      // a second shift the same day (Daily only): work above one day billed at this % of the daily price
+      'second_shift_pct': _mode == 'Daily' ? (numOrNull(_secondShift) ?? 0) : 0,
       // the operator is the vendor's business: never priced by us
       'operator_included': true,
       'operator_daily_rate': null,
@@ -355,6 +359,8 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                   DropdownMenuItem(value: 'HalfDayThreshold', child: Text('Half day under a threshold')),
                 ], onChanged: (v) => setState(() => _partial = v ?? _partial)),
               if (_mode == 'Daily' && _partial == 'HalfDayThreshold') textField(_halfDay, 'Half-day threshold', number: true, required: true, suffix: 'h'),
+              if (_mode == 'Daily')
+                textField(_secondShift, 'Second shift same day', number: true, suffix: '%', hint: '0 to 100 of the daily price (0 = not paid)'),
             ]),
           ], hint: _mode == 'Monthly'
               ? 'Working days of a month = days of the month minus Fridays. Hourly price = monthly price / working days / hours per day. '

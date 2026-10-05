@@ -513,6 +513,20 @@ class _ItemTile extends StatelessWidget {
                   ),
               ],
             ),
+            if (item.list('site_allocation').isNotEmpty) ...[
+              const SizedBox(height: 10),
+              const Text('Cost by site (monthly machine at several sites, split by hours)', style: TextStyle(color: AppColors.muted, fontSize: 12, fontWeight: FontWeight.w700)),
+              for (final a in item.list('site_allocation'))
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(children: [
+                    Expanded(child: Text(a.str('site_code', '#${a.str('site_id')}'), style: const TextStyle(fontSize: 13))),
+                    SizedBox(width: 90, child: Text('${Fmt.num2(a.dblOrNull('hours'))} h', textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
+                    SizedBox(width: 70, child: Text('${Fmt.num2(a.dblOrNull('share_pct'))}%', textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),
+                    SizedBox(width: 120, child: Text(Fmt.money(a.dblOrNull('amount'), cur), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                  ]),
+                ),
+            ],
             if (onRows != null || onPdf != null || onFuelPdf != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -544,6 +558,7 @@ String _lineName(String t) {
     'BreakdownDeduction': 'Breakdown deduction',
     'FuelPriceDifference': 'Fuel price difference',
     'HoursShortfall': 'Missing hours (below the monthly hours due)',
+    'SecondShift': 'Second shift the same day',
   };
   return names[t] ?? t.replaceAllMapped(RegExp(r'(?<=[a-z])([A-Z])'), (m) => ' ${m[1]!.toLowerCase()}');
 }
@@ -784,9 +799,11 @@ class _BatchScreenState extends State<BatchScreen> {
     final canFinalize = status == 'Generated' && !fin && Auth.I.isAdmin; // the Admin finalizes and marks paid
     final canPay = status == 'Generated' && fin && Auth.I.isAdmin;
     final hasFuelDiff = b.list('items').any((i) => (i.dblOrNull('fuel_difference') ?? 0) != 0);
-    final vendorInvoices = b.list('invoices').where((i) => i.str('kind') == 'Vendor').toList();
+    final vendorInvoices = b.list('invoices').where((i) => i.str('kind') == 'Vendor' && !i.flag('cancelled')).toList();
+    final cancelledInvoices = b.list('invoices').where((i) => i.flag('cancelled')).toList();
     final canVoid = status == 'Generated';
-    final canSupersede = fin && (status == 'Generated' || status == 'Paid');
+    // a paid batch is never recalculated: differences go through an official correction
+    final canSupersede = fin && status == 'Generated';
     return PageBody(onRefresh: _load, maxWidth: 1200, children: [
       const SizedBox(height: 16),
       Card(
@@ -811,8 +828,19 @@ class _BatchScreenState extends State<BatchScreen> {
                 child: const Row(children: [
                   Icon(Icons.warning_amber_rounded, color: AppColors.standby),
                   SizedBox(width: 10),
-                  Expanded(child: Text('Some attendance rows changed after this batch was generated. Void it and generate again before finalizing.')),
+                  Expanded(child: Text('Something that changes the amounts changed after this batch was generated. Void it and generate again before finalizing.')),
                 ]),
+              ),
+            if (b.flag('stale'))
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(b.list('stale_reasons').take(6).map(_staleReason).join('\n'), style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+              ),
+            if (cancelledInvoices.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text('Cancelled numbers (kept, never reused): ${cancelledInvoices.map((i) => i.str('invoice_no')).join(', ')}',
+                    style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
               ),
             if (b.strOrNull('void_reason') != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('Void reason: ${b.str('void_reason')}', style: const TextStyle(color: AppColors.breakdown))),
             if (b.strOrNull('supersede_reason') != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('Version reason: ${b.str('supersede_reason')}', style: const TextStyle(color: AppColors.muted))),
@@ -971,5 +999,27 @@ class _SnapshotSheetState extends State<_SnapshotSheet> {
         ]),
       ),
     );
+  }
+}
+
+/// One line per reason the batch would come out differently if generated now.
+String _staleReason(Json r) {
+  switch (r.str('code')) {
+    case 'AMOUNT_CHANGED':
+      return 'Amount changed: ${r.str('was')} -> ${r.str('now')}';
+    case 'ITEM_ADDED':
+      return 'A machine/site would be added (${r.str('net')})';
+    case 'ITEM_REMOVED':
+      return 'A machine/site would be removed (${r.str('was')})';
+    case 'ROWS_ADDED':
+      return '${r.str('count')} approved row(s) not in this batch yet';
+    case 'ROWS_DROPPED':
+      return '${r.str('count')} row(s) no longer payable';
+    case 'ROW_CHANGED':
+      return 'Row #${r.str('eq_attendance_id')}: ${r.str('reason')}';
+    case 'SETTING_CHANGED':
+      return 'Setting ${r.str('setting')}: ${r.str('was')} -> ${r.str('now')}';
+    default:
+      return r.str('message', r.str('code'));
   }
 }

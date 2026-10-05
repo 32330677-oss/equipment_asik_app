@@ -69,7 +69,7 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
     final ok = await confirmDialog(
       context,
       'Submit ${Fmt.dayLabel(_date)}?',
-      '${s.intv('draft_rows')} row(s) will be sent to the office for approval. You cannot change them after, unless they are rejected.'
+      '${s.intv('draft_rows')} row(s) will be sent to the office for approval. Until the office approves them you can still recall them to fix a mistake.'
           '${notArrived.isEmpty ? '' : '\n\nNo record for: ${notArrived.join(', ')}. Mark them Absent first if they did not come.'}',
       confirm: 'Submit day',
     );
@@ -79,6 +79,19 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
       if (!mounted) return;
       final missing = (r['machines_without_row'] as List?)?.cast<Object>() ?? const [];
       showSnack(context, '${r.intv('submitted')} row(s) submitted.${missing.isEmpty ? '' : ' Without record: ${missing.join(', ')}.'}', error: missing.isNotEmpty);
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  /// Takes back every Submitted row of the day (not approved yet) to Draft.
+  Future<void> _recallDay() async {
+    final reason = await promptText(context, 'Recall ${Fmt.dayLabel(_date)}?', label: 'What needs fixing (kept in the history)', confirm: 'Recall');
+    if (reason == null) return;
+    try {
+      final r = asJson(await Api.I.post('/equipment/attendance/recall', {'site_id': widget.siteId, 'shift_type': widget.shift, 'record_date': _date, 'reason': reason}));
+      if (mounted) showSnack(context, '${r.intv('recalled')} row(s) back to Draft.');
       _load();
     } catch (e) {
       if (mounted) showError(context, e);
@@ -116,10 +129,15 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
                     load: () => Api.I.getBytes('/equipment/reports/daily.pdf', query: {'date': _date, 'site_id': widget.siteId}));
               }
               if (v == 'refresh') _load();
+              if (v == 'recall') _recallDay();
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'refresh', child: ListTile(leading: Icon(Icons.refresh_rounded), title: Text('Refresh'))),
-              PopupMenuItem(value: 'pdf', child: ListTile(leading: Icon(Icons.picture_as_pdf_rounded), title: Text('Daily report PDF'))),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'refresh', child: ListTile(leading: Icon(Icons.refresh_rounded), title: Text('Refresh'))),
+              const PopupMenuItem(value: 'pdf', child: ListTile(leading: Icon(Icons.picture_as_pdf_rounded), title: Text('Daily report PDF'))),
+              if ((d?.obj('submit').intv('submitted_rows') ?? 0) > 0)
+                PopupMenuItem(
+                    value: 'recall',
+                    child: ListTile(leading: const Icon(Icons.undo_rounded), title: Text('Recall the day (${d!.obj('submit').intv('submitted_rows')} submitted)'))),
             ],
           ),
         ],
@@ -512,6 +530,19 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
     }
   }
 
+  Future<void> _recall() async {
+    final reason = await promptText(context, 'Recall this row?', label: 'What needs fixing (kept in the history)', confirm: 'Recall');
+    if (reason == null) return;
+    try {
+      final r = asJson(await Api.I.patch('/equipment/attendance/${_a.intv('eq_attendance_id')}/recall', {'reason': reason}));
+      if (!mounted) return;
+      setState(() => _a = r);
+      showSnack(context, 'Back to Draft. Fix it, then submit the day again.');
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
   Future<void> _resubmit() async {
     try {
       final r = asJson(await Api.I.patch('/equipment/attendance/${_a.intv('eq_attendance_id')}/resubmit'));
@@ -577,6 +608,13 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
                 ),
             ]),
           ),
+        ],
+        if (a.str('status') == 'Submitted') ...[
+          const SizedBox(height: 14),
+          Row(children: [
+            const Expanded(child: Text('Sent to the office, not approved yet. Recall it to fix a mistake.', style: TextStyle(color: AppColors.muted, fontSize: 13))),
+            OutlinedButton.icon(onPressed: _recall, icon: const Icon(Icons.undo_rounded), label: const Text('Recall')),
+          ]),
         ],
         if (_editable) ...[
           const SizedBox(height: 14),

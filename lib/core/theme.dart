@@ -18,6 +18,8 @@ class AppColors {
   static const standby = Color(0xFFD48A00);
   static const neutral = Color(0xFF9AA0AB);
   static const info = Color(0xFF2563EB);
+  /// Rows changed by an Admin after approval.
+  static const edited = Color(0xFF7C3AED);
 }
 
 class AppTheme {

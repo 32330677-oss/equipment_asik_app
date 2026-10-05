@@ -5,6 +5,7 @@ import '../../core/auth.dart';
 import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
+import '../../widgets/file_versions.dart';
 import '../../widgets/lookups.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
@@ -284,15 +285,8 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
   }
 
   Future<void> _uploadDoc(Json c) async {
-    final f = await pickOneFile(label: 'Contract', extensions: ['pdf', 'jpg', 'jpeg', 'png']);
-    if (f == null) return;
-    try {
-      await Api.I.upload('/equipment/contracts/${c.intv('vendor_contract_id')}/document', [f]);
-      if (mounted) showSnack(context, 'Document uploaded.');
-      _load();
-    } catch (e) {
-      if (mounted) showError(context, e);
-    }
+    final ok = await uploadFileVersion(context, basePath: '/equipment/contracts/${c.intv('vendor_contract_id')}/document', hasFile: c.flag('has_document'), label: 'Contract');
+    if (ok) _load();
   }
 
   Future<void> _statement() async {
@@ -404,10 +398,17 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
                   trailing: Wrap(spacing: 4, children: [
                     if (c.flag('has_document'))
                       IconButton(
-                        tooltip: 'View document',
+                        tooltip: 'Contract document (all versions)',
                         icon: const Icon(Icons.attach_file_rounded, color: AppColors.navy),
-                        onPressed: () => viewStoredFile(context, title: 'Contract ${c.str('contract_number')}', fileName: 'contract-${c.str('contract_number')}',
-                            load: () => Api.I.getBytes('/equipment/contracts/${c.intv('vendor_contract_id')}/document')),
+                        onPressed: () async {
+                          final changed = await showFileVersions(context,
+                              title: 'Contract ${c.str('contract_number')}',
+                              basePath: '/equipment/contracts/${c.intv('vendor_contract_id')}/document',
+                              listPath: '/equipment/contracts/${c.intv('vendor_contract_id')}/documents',
+                              fileName: 'contract-${c.str('contract_number')}',
+                              canUpload: _admin);
+                          if (changed) _load();
+                        },
                       ),
                     if (_admin)
                       PopupMenuButton<String>(

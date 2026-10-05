@@ -5,6 +5,7 @@ import '../../core/auth.dart';
 import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
+import '../../widgets/lookups.dart';
 import '../../widgets/ui.dart';
 
 /// Admin review of machine attendance: approve / reject in bulk, anomalies, edits, corrections.
@@ -155,6 +156,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
             for (final r in rows)
               DataRow(
                 selected: _selected.contains(r.intv('eq_attendance_id')),
+                color: r.flag('edited_after_approval') ? WidgetStatePropertyAll(AppColors.edited.withValues(alpha: 0.07)) : null,
                 onSelectChanged: admin && r.str('status') == 'Submitted'
                     ? (v) => setState(() => v == true ? _selected.add(r.intv('eq_attendance_id')) : _selected.remove(r.intv('eq_attendance_id')))
                     : null,
@@ -162,7 +164,18 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
                   DataCell(Text(Fmt.dayLabel(r.str('record_date'))), onTap: () => _open(r)),
                   DataCell(Text('${r.str('site_code')} ${r.str('shift_type') == 'Night' ? '(N)' : ''}'), onTap: () => _open(r)),
                   DataCell(Text('${r.str('equipment_code')}  ${r.str('type_name')}', style: const TextStyle(fontWeight: FontWeight.w700)), onTap: () => _open(r)),
-                  DataCell(WorkflowPill(r.str('status')), onTap: () => _open(r)),
+                  DataCell(
+                      r.flag('edited_after_approval')
+                          ? Tooltip(
+                              message: 'Edited after approval: ${r.str('admin_edit_reason')}',
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                WorkflowPill(r.str('status')),
+                                const SizedBox(width: 4),
+                                const Icon(Icons.edit_note_rounded, size: 18, color: AppColors.edited),
+                              ]),
+                            )
+                          : WorkflowPill(r.str('status')),
+                      onTap: () => _open(r)),
                   DataCell(StatePill(r.str('day_status') == 'Working' ? 'Working' : r.str('day_status')), onTap: () => _open(r)),
                   DataCell(Text(r.strOrNull('check_in_time') == null ? '-' : '${Fmt.time(r.str('check_in_time'))} - ${Fmt.timeOn(r.strOrNull('check_out_time'), r.str('record_date'))}'), onTap: () => _open(r)),
                   DataCell(Text(Fmt.hoursFromMinutes(r.intOrNull('working_minutes'))), onTap: () => _open(r)),
@@ -264,39 +277,175 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
     await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}/standby-credit', {'hours': hours, if (note.isNotEmpty) 'note': note}), 'Standby hours saved.');
   }
 
+  /// One change at a time. Before the lock: a direct Admin edit (reason required on an Approved row, which
+  /// then shows as "edited after approval"). Inside a finalized period: a correction request.
   Future<void> _edit({required bool correction}) async {
     final r = _r!;
     String? inT = r.strOrNull('check_in_time');
     String? outT = r.strOrNull('check_out_time');
+    final working = r.str('day_status') == 'Working';
     final changes = <String, dynamic>{};
-    final what = await pickFromList(context, correction ? 'Correct (finalized period)' : 'Edit row', [
-      if (r.str('day_status') == 'Working' || inT != null) PickOption('in', 'Check-in time', Fmt.time(inT)),
-      if (r.str('day_status') == 'Working' || outT != null) PickOption('out', 'Check-out time', Fmt.timeOn(outT, r.str('record_date'))),
+    final standbyApplies = r.obj('standby_credit').flag('applies');
+    final what = await pickFromList(context, correction ? 'Request a correction (row already paid)' : 'Edit row', [
+      PickOption('status', 'Day status', r.str('day_status')),
+      if (working || inT != null) PickOption('in', 'Check-in time', Fmt.time(inT)),
+      if (working || outT != null) PickOption('out', 'Check-out time', Fmt.timeOn(outT, r.str('record_date'))),
+      if (working) PickOption('downtime', 'Breaks / breakdown / standby periods', '${r.list('downtime').length} period(s)'),
+      if (working) PickOption('operator', 'Operator', r.str('operator_name', '-')),
+      if (working) PickOption('meter', 'Meter readings', '${r.str('meter_start', '-')} -> ${r.str('meter_end', '-')}'),
+      PickOption('work', 'Work done', r.str('work_description', '-')),
+      if (correction && standbyApplies)
+        PickOption('standby', 'Standby hours paid', r.intOrNull('standby_credit_minutes') == null ? '-' : '${Fmt.hoursFromMinutes(r.intv('standby_credit_minutes'))} h'),
       PickOption('remarks', 'Remarks', r.str('remarks', '-')),
     ]);
     if (what == null || !mounted) return;
-    if (what.value == 'in') {
-      final v = await pickDateTime(context, initial: inT ?? '${r.str('record_date')} 07:00');
-      if (v == null) return;
-      changes['check_in_time'] = v;
-    } else if (what.value == 'out') {
-      final v = await pickDateTime(context, initial: outT ?? '${r.str('record_date')} 17:00');
-      if (v == null) return;
-      changes['check_out_time'] = v;
-    } else {
-      final v = await promptText(context, 'Remarks', label: 'Remarks', initial: r.str('remarks'), required: false);
-      if (v == null) return;
-      changes['remarks'] = v;
+    switch (what.value) {
+      case 'status': {
+        final st = await pickFromList(context, 'Day status', [
+          for (final x in const ['Working', 'Standby', 'Breakdown', 'Absent', 'Holiday'])
+            if (x != r.str('day_status')) PickOption(x, x),
+        ]);
+        if (st == null) return;
+        changes['day_status'] = st.value;
+        if (st.value == 'Working' && inT == null && mounted) {
+          final a = await pickDateTime(context, initial: '${r.str('record_date')} 07:00');
+          if (a == null || !mounted) return;
+          final b = await pickDateTime(context, initial: '${r.str('record_date')} 17:00');
+          if (b == null) return;
+          changes['check_in_time'] = a;
+          changes['check_out_time'] = b;
+        }
+        if (st.value == 'Absent' || st.value == 'Holiday') {
+          changes['check_in_time'] = null;
+          changes['check_out_time'] = null;
+        }
+      }
+      case 'in': {
+        final v = await pickDateTime(context, initial: inT ?? '${r.str('record_date')} 07:00');
+        if (v == null) return;
+        changes['check_in_time'] = v;
+      }
+      case 'out': {
+        final v = await pickDateTime(context, initial: outT ?? '${r.str('record_date')} 17:00');
+        if (v == null) return;
+        changes['check_out_time'] = v;
+      }
+      case 'downtime': {
+        final list = await _editDowntime(r);
+        if (list == null) return;
+        changes['downtime'] = list;
+      }
+      case 'operator': {
+        final ops = await Lookups.operators(r.intv('vendor_id'));
+        if (!mounted) return;
+        final op = await pickFromList(context, 'Operator', ops);
+        if (op == null) return;
+        changes['operator_id'] = op.value;
+      }
+      case 'meter': {
+        final a = await promptText(context, 'Meter start', label: 'Meter start', initial: r.str('meter_start'), maxLines: 1);
+        if (a == null || !mounted) return;
+        final b = await promptText(context, 'Meter end', label: 'Meter end', initial: r.str('meter_end'), maxLines: 1);
+        if (b == null) return;
+        final ms = double.tryParse(a.replaceAll(',', '.'));
+        final me = double.tryParse(b.replaceAll(',', '.'));
+        if (ms == null || me == null) {
+          if (mounted) showError(context, ApiException(null, 'VALIDATION', 'Type numbers for the meter readings.'));
+          return;
+        }
+        changes['meter_start'] = ms;
+        changes['meter_end'] = me;
+      }
+      case 'work': {
+        final v = await promptText(context, 'Work done', label: 'Work done', initial: r.str('work_description'), required: false);
+        if (v == null) return;
+        changes['work_description'] = v;
+      }
+      case 'standby': {
+        final max = r.obj('standby_credit').dblOrNull('max_hours') ?? 24;
+        final v = await promptText(context, 'Standby hours to pay (max ${max.toStringAsFixed(2)} h)', label: 'Hours', maxLines: 1,
+            initial: r.intOrNull('standby_credit_minutes') == null ? '' : (r.intv('standby_credit_minutes') / 60).toStringAsFixed(2));
+        if (v == null) return;
+        final h = double.tryParse(v.replaceAll(',', '.'));
+        if (h == null || h < 0 || h > max) {
+          if (mounted) showError(context, ApiException(null, 'VALIDATION', 'Type a number of hours between 0 and ${max.toStringAsFixed(2)}.'));
+          return;
+        }
+        changes['standby_credit_hours'] = h;
+      }
+      default: {
+        final v = await promptText(context, 'Remarks', label: 'Remarks', initial: r.str('remarks'), required: false);
+        if (v == null) return;
+        changes['remarks'] = v;
+      }
     }
     if (!mounted) return;
     if (correction) {
-      final reason = await promptText(context, 'Reason of the correction', label: 'Reason (kept in the correction log)');
+      final reason = await promptText(context, 'Reason of the correction', label: 'Reason (min 5 characters, printed on the debit / credit note)');
       if (reason == null) return;
       await _do(() => Api.I.post('/equipment/admin/attendance/${widget.id}/correction', {'reason': reason, 'changes': changes}),
-          'Corrected. The finalized payroll was not changed; settle it with an adjustment.');
+          'Correction requested. The accountant reviews it, then you approve it in Fuel & adjustments → Corrections.');
     } else {
-      await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}', changes), 'Saved.');
+      final approved = r.str('status') == 'Approved';
+      final reason = await promptText(context, approved ? 'Why change an approved row?' : 'Reason (optional)',
+          label: approved ? 'Reason (min 5 characters; the row will show as edited after approval)' : 'Reason', required: approved);
+      if (reason == null) return;
+      await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}', {...changes, if (reason.trim().isNotEmpty) 'reason': reason.trim()}),
+          approved ? 'Saved. The row stays Approved and is marked as edited after approval.' : 'Saved.');
     }
+  }
+
+  /// Edits the whole list of downtime periods of a Working row; returns the new list (replaces the old one).
+  Future<List<Map<String, dynamic>>?> _editDowntime(Json r) async {
+    final items = <Map<String, dynamic>>[
+      for (final p in r.list('downtime'))
+        if (p.strOrNull('end_time') != null)
+          {'downtime_type': p.str('downtime_type'), 'start_time': p.str('start_time').substring(0, 16), 'end_time': p.str('end_time').substring(0, 16), 'reason': p.strOrNull('reason')},
+    ];
+    return showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => AlertDialog(
+          title: const Text('Downtime periods'),
+          content: SizedBox(
+            width: 480,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (items.isEmpty) const Padding(padding: EdgeInsets.all(8), child: Text('No period.', style: TextStyle(color: AppColors.muted))),
+              for (final p in items)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('${p['downtime_type']}  ${Fmt.time(p['start_time'])} - ${Fmt.time(p['end_time'])}'),
+                  subtitle: p['reason'] == null ? null : Text('${p['reason']}'),
+                  trailing: IconButton(icon: const Icon(Icons.delete_outline_rounded, color: AppColors.breakdown), onPressed: () => set(() => items.remove(p))),
+                ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Add period'),
+                  onPressed: () async {
+                    final t = await pickFromList(ctx, 'Type', [for (final x in const ['Break', 'Refuel', 'Breakdown', 'Standby']) PickOption(x, x)]);
+                    if (t == null || !ctx.mounted) return;
+                    final a = await pickDateTime(ctx, initial: r.strOrNull('check_in_time') ?? '${r.str('record_date')} 10:00', askDate: false);
+                    if (a == null || !ctx.mounted) return;
+                    final b = await pickDateTime(ctx, initial: a, askDate: false);
+                    if (b == null || !ctx.mounted) return;
+                    final why = await promptText(ctx, 'Reason (optional)', label: 'Reason', required: false);
+                    if (why == null) return;
+                    set(() => items.add({'downtime_type': t.value, 'start_time': a, 'end_time': b, 'reason': why.isEmpty ? null : why}));
+                  },
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, items), child: const Text('Use these periods')),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -380,10 +529,25 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                             TextButton(onPressed: _standbyHours, child: Text(r.intOrNull('standby_credit_minutes') == null ? 'Set hours' : 'Change')),
                           ]),
                         ),
+                      if (r.flag('edited_after_approval'))
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(color: AppColors.edited.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.edited.withValues(alpha: 0.3))),
+                          child: Row(children: [
+                            const Icon(Icons.edit_note_rounded, color: AppColors.edited),
+                            const SizedBox(width: 10),
+                            Expanded(child: Text('Edited after approval${r.strOrNull('admin_edit_at') == null ? '' : ' on ${Fmt.date(r.str('admin_edit_at'))}'}: ${r.str('admin_edit_reason')}')),
+                          ]),
+                        ),
                       if (admin)
                         Wrap(spacing: 8, runSpacing: 8, children: [
-                          OutlinedButton.icon(onPressed: () => _edit(correction: false), icon: const Icon(Icons.edit_rounded), label: const Text('Edit')),
-                          OutlinedButton.icon(onPressed: () => _edit(correction: true), icon: const Icon(Icons.gavel_rounded), label: const Text('Correction (finalized period)')),
+                          if (r.intOrNull('locked_by_batch_id') == null)
+                            OutlinedButton.icon(onPressed: () => _edit(correction: false), icon: const Icon(Icons.edit_rounded), label: const Text('Edit'))
+                          else ...[
+                            Pill('Paid by batch #${r.str('locked_by_batch_id')}', color: AppColors.info, icon: Icons.lock_rounded),
+                            OutlinedButton.icon(onPressed: () => _edit(correction: true), icon: const Icon(Icons.gavel_rounded), label: const Text('Request correction')),
+                          ],
                         ]),
                       const SizedBox(height: 12),
                       SectionCard(title: 'History', child: Column(children: [

@@ -718,6 +718,40 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
     _do(() => Api.I.patch('/equipment/fuel-terms/${t.intv('fuel_terms_id')}/end', {'effective_to': d}), 'Fuel difference stops after $d.');
   }
 
+  /// The first day was entered wrong (e.g. today instead of the day the machine joined): reason required.
+  /// Refused by the server when the days involved are inside a finalized payroll, or overlap earlier terms.
+  Future<void> _changeFuelTermsStart(Json t) async {
+    var date = t.str('effective_from');
+    final reason = TextEditingController();
+    final ok = await showFormDialog<bool>(
+      context,
+      title: 'Correct the first day of these fuel terms',
+      saveLabel: 'Save',
+      width: 440,
+      onSave: () async {
+        await Api.I.patch('/equipment/fuel-terms/${t.intv('fuel_terms_id')}/start', {'effective_from': date, 'reason': reason.text.trim()});
+        return true;
+      },
+      body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('Use this when the first day was entered wrong, e.g. while entering past months. Days already paid by a finalized payroll cannot move.',
+            style: TextStyle(color: AppColors.muted, fontSize: 13)),
+        const SizedBox(height: 12),
+        DateField(label: 'Real first day of the fuel difference', value: date, onChanged: (x) => set(() => date = x ?? date)),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: reason,
+          maxLines: 2,
+          decoration: const InputDecoration(labelText: 'Reason *', hintText: 'e.g. compensated since the machine joined'),
+          validator: (v) => (v ?? '').trim().length < 5 ? 'Write at least 5 characters' : null,
+        ),
+      ]),
+    );
+    if (ok == true && mounted) {
+      showSnack(context, 'First day corrected.');
+      _load();
+    }
+  }
+
   Widget _fuelTerms(Json m) {
     final terms = m.list('fuel_terms');
     final today = Fmt.today();
@@ -744,6 +778,8 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                         '${t.strOrNull('note') == null ? '' : '  ·  ${t.str('note')}'}'),
                     trailing: Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
                       if (active) const Pill('Current', color: AppColors.gold),
+                      if (_admin)
+                        IconButton(tooltip: 'Correct the first day', icon: const Icon(Icons.edit_calendar_rounded), onPressed: () => _changeFuelTermsStart(t)),
                       if (_admin && t.strOrNull('effective_to') == null)
                         IconButton(tooltip: 'Stop from a date', icon: const Icon(Icons.event_busy_rounded), onPressed: () => _endFuelTerms(t)),
                     ]),

@@ -310,6 +310,26 @@ class _SupervisorsSheetState extends State<SupervisorsSheet> {
     }
   }
 
+  /// The first day of the period was entered wrong (e.g. today while the supervisor started with the project).
+  Future<void> _changeStart(Json r) async {
+    final d = await pickDate(context, initial: r.str('from_date'));
+    if (d == null || d == r.str('from_date') || !mounted) return;
+    final reason = await promptText(context, 'Correct the first day to ${Fmt.date(d)}?',
+        label: 'Reason (kept in the history)',
+        minLength: 5,
+        confirm: 'Save',
+        help: 'Use this when the first day was entered wrong, e.g. while entering past months. '
+            'Days inside a finalized payroll cannot move, and two supervisors cannot cover the same site and shift.');
+    if (reason == null) return;
+    try {
+      await Api.I.patch('/site-supervisors/${r.intv('site_supervisor_id')}/start', {'from_date': d, 'reason': reason});
+      if (mounted) showSnack(context, 'First day corrected.');
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final today = Fmt.today();
@@ -350,6 +370,8 @@ class _SupervisorsSheetState extends State<SupervisorsSheet> {
                                   subtitle: Text('${r.str('shift_type')} shift  |  ${Fmt.date(r.str('from_date'))} - ${r.strOrNull('to_date') == null ? 'open' : Fmt.date(r.str('to_date'))}'),
                                   trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                                     if (current) const Pill('Current', color: AppColors.working),
+                                    if (widget.editable)
+                                      IconButton(tooltip: 'Correct the first day', icon: const Icon(Icons.edit_calendar_rounded), onPressed: () => _changeStart(r)),
                                     if (widget.editable && (r.strOrNull('to_date') == null || r.str('to_date').compareTo(today) >= 0))
                                       TextButton(onPressed: () => _end(r), child: const Text('End')),
                                   ]),

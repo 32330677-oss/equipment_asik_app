@@ -40,7 +40,7 @@ class _AppShellState extends State<AppShell> {
       _NavItem('Live board', Icons.dashboard_rounded, () => const LiveBoardScreen(), section: 'Operations'),
       _NavItem('Attendance review', Icons.fact_check_rounded, () => const AttendanceReviewScreen()),
       _NavItem('Paper sheets', Icons.description_rounded, () => const TimesheetsScreen()),
-      _NavItem('Payroll', Icons.payments_rounded, () => const PayrollScreen(), section: 'Money'),
+      _NavItem('Invoice', Icons.payments_rounded, () => const PayrollScreen(), section: 'Money'),
       _NavItem('Fuel & adjustments', Icons.local_gas_station_rounded, () => const FuelAdjustmentsScreen()),
       _NavItem('Machines', Icons.precision_manufacturing_rounded, () => const MachinesScreen(), section: 'Fleet'),
       _NavItem('Vendors', Icons.business_rounded, () => const VendorsScreen()),

@@ -51,7 +51,7 @@ class _FuelTab extends StatefulWidget {
 class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
   final _s = Loadable<List<Json>>();
   bool _unpricedOnly = true;
-  String _from = Fmt.dateOf(DateTime.now().subtract(const Duration(days: 60)));
+  String _from = Fmt.dateOf(Fmt.now().subtract(const Duration(days: 60)));
   String _to = Fmt.today();
   PickOption? _vendor;
 

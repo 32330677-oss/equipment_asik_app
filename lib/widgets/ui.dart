@@ -17,7 +17,7 @@ void showSnack(BuildContext context, String message, {bool error = false}) {
   ));
 }
 
-void showError(BuildContext context, Object e) => showSnack(context, e is ApiException ? e.message : '$e', error: true);
+void showError(BuildContext context, Object e) => showSnack(context, e is ApiException ? e.message : 'Something went wrong. Please try again.', error: true);
 
 Future<bool> confirmDialog(BuildContext context, String title, String message, {String confirm = 'Confirm', bool danger = false}) async {
   final r = await showDialog<bool>(
@@ -76,7 +76,7 @@ Future<String?> promptText(BuildContext context, String title,
 
 // ======================================================================= pickers
 Future<String?> pickDate(BuildContext context, {String? initial, String? first, String? last}) async {
-  final init = Fmt.parse(initial) ?? DateTime.now();
+  final init = Fmt.parse(initial) ?? Fmt.now();
   final d = await showDatePicker(
     context: context,
     initialDate: init,
@@ -88,7 +88,7 @@ Future<String?> pickDate(BuildContext context, {String? initial, String? first, 
 
 /// Returns 'yyyy-MM-dd HH:mm'. [date] fixes the day (only the time is asked) unless [askDate].
 Future<String?> pickDateTime(BuildContext context, {String? initial, bool askDate = true}) async {
-  var base = Fmt.parse(initial) ?? DateTime.now();
+  var base = Fmt.parse(initial) ?? Fmt.now();
   if (askDate) {
     final d = await showDatePicker(context: context, initialDate: base, firstDate: DateTime(2020), lastDate: DateTime(2035));
     if (d == null) return null;
@@ -358,15 +358,19 @@ class ErrorView extends StatelessWidget {
   const ErrorView({super.key, required this.error, required this.onRetry});
   final Object error;
   final VoidCallback onRetry;
+  bool get network => error is ApiException && (error as ApiException).isNetwork;
   @override
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.cloud_off_rounded, size: 48, color: AppColors.breakdown),
+          Icon(network ? Icons.wifi_off_rounded : Icons.error_outline_rounded, size: 48, color: network ? AppColors.standby : AppColors.breakdown),
           const SizedBox(height: 10),
-          Text(error is ApiException ? (error as ApiException).message : '$error', textAlign: TextAlign.center),
+          Text(network ? 'No connection' : 'Could not load this page', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          const SizedBox(height: 6),
+          Text(error is ApiException ? (error as ApiException).message : 'Something went wrong. Please try again.', textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.muted)),
           const SizedBox(height: 14),
           OutlinedButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh), label: const Text('Try again')),
         ]),

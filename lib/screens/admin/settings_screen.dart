@@ -15,7 +15,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _s = Loadable<List<Json>>();
 
   static const _groups = <String, List<String>>{
-    'Paper sheets & payroll': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_default_currency'],
+    'Paper sheets & payroll': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_finalize_requires_scan', 'eq_default_currency'],
+    'Billing rules': ['eq_weekly_off_day', 'eq_fuel_diff_allow_negative'],
     'Attendance checks': ['eq_meter_tolerance_pct', 'eq_long_session_review_hours', 'week_gate_enabled', 'week_start_day', 'eq_shift_continuity_minutes'],
     'General': ['company_name', 'app_time_zone', 'eq_live_refresh_seconds'],
   };
@@ -33,6 +34,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'app_time_zone': 'Business time zone',
     'eq_live_refresh_seconds': 'Live board refresh (seconds)',
     'eq_shift_continuity_minutes': 'Continuous shifts: max gap (minutes)',
+    'eq_finalize_requires_scan': 'Finalize only with the signed sheets uploaded',
+    'eq_weekly_off_day': 'Weekly day off (monthly machines)',
+    'eq_fuel_diff_allow_negative': 'Deduct the fuel difference when the official price falls below the base',
   };
   static const _days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -69,7 +73,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (type == 'bool') {
       return Switch(value: value == 'true', onChanged: (v) => _save(key, v ? 'true' : 'false'));
     }
-    if (key == 'week_start_day') {
+    if (s.flag('read_only')) {
+      return Tooltip(message: 'Fixed on the server', child: Chip(avatar: const Icon(Icons.lock_rounded, size: 16), label: Text(value)));
+    }
+    if (key == 'week_start_day' || key == 'eq_weekly_off_day') {
       return Dropdown<String>(
         label: '', value: value, width: 160,
         items: [for (var i = 0; i < 7; i++) DropdownMenuItem(value: '$i', child: Text(_days[i]))],

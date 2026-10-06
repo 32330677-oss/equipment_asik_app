@@ -21,7 +21,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
   String? _status = 'Submitted';
   String? _anomaly;
   String? _paper;
-  String _from = Fmt.dateOf(DateTime.now().subtract(const Duration(days: 30)));
+  String _from = Fmt.dateOf(Fmt.now().subtract(const Duration(days: 30)));
   String _to = Fmt.today();
   final Set<int> _selected = {};
   bool _busy = false;

@@ -290,7 +290,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
   }
 
   Future<void> _statement() async {
-    final now = DateTime.now();
+    final now = Fmt.now();
     final from = await pickDate(context, initial: Fmt.dateOf(DateTime(now.year, now.month, 1)));
     if (from == null || !mounted) return;
     final to = await pickDate(context, initial: Fmt.today());

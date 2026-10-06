@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'api.dart';
@@ -14,6 +16,12 @@ class Auth extends ChangeNotifier {
   String? today;
   String? lastMessage;
 
+  /// Signed in on this device but the server could not be reached at start (no internet on site):
+  /// the sign-in is KEPT; the app shows a "no connection" screen and retries by itself.
+  String? offlineMessage;
+  bool get offline => offlineMessage != null;
+  Timer? _retry;
+
   bool get signedIn => user != null;
   String get role => user?.str('role') ?? '';
   bool get isAdmin => role == 'Admin';
@@ -26,15 +34,38 @@ class Auth extends ChangeNotifier {
 
   Future<void> bootstrap() async {
     await Api.I.loadToken();
-    if (Api.I.hasToken) {
-      try {
-        await refreshMe();
-      } catch (_) {
+    if (Api.I.hasToken) await _restore();
+    ready = true;
+    notifyListeners();
+  }
+
+  /// Restores the session. Only a refusal by the server (401) signs the user out; a network problem keeps the
+  /// sign-in and retries every 15 seconds.
+  Future<void> _restore() async {
+    try {
+      await refreshMe();
+      offlineMessage = null;
+      _retry?.cancel();
+    } on ApiException catch (e) {
+      if (e.isNetwork || (e.status ?? 0) >= 500) {
+        offlineMessage = e.message;
+        _retry?.cancel();
+        _retry = Timer(const Duration(seconds: 15), retryConnection);
+      } else {
+        offlineMessage = null;
         await Api.I.setToken(null);
         user = null;
+        if (e.status == 401) lastMessage = 'Please sign in again.';
       }
+    } catch (_) {
+      offlineMessage = 'Cannot open your account right now. Try again.';
     }
-    ready = true;
+  }
+
+  /// "Try again" on the no-connection screen (also called automatically).
+  Future<void> retryConnection() async {
+    if (!Api.I.hasToken) return;
+    await _restore();
     notifyListeners();
   }
 
@@ -62,6 +93,8 @@ class Auth extends ChangeNotifier {
   }
 
   Future<void> logout([String? message]) async {
+    _retry?.cancel();
+    offlineMessage = null;
     await Api.I.setToken(null);
     user = null;
     sites = <Json>[];

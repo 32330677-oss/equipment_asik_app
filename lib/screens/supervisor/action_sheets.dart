@@ -15,7 +15,7 @@ const standbyReasons = ['No work available', 'Waiting for material', 'Waiting fo
 /// Default wall time for an action on [date] when it is not today.
 String defaultTime(String date, {required bool start, String shift = 'Day'}) {
   if (date == Fmt.today()) return Fmt.nowWall();
-  final d = Fmt.parse(date) ?? DateTime.now();
+  final d = Fmt.parse(date) ?? Fmt.now();
   if (shift == 'Night') {
     return start ? Fmt.wallOf(DateTime(d.year, d.month, d.day, 19)) : Fmt.wallOf(DateTime(d.year, d.month, d.day + 1, 5));
   }

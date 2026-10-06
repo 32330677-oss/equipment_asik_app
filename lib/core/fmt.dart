@@ -6,11 +6,28 @@ class Fmt {
   static final _d = DateFormat('yyyy-MM-dd');
   static final _dt = DateFormat('yyyy-MM-dd HH:mm');
 
-  static String today() => _d.format(DateTime.now());
-  static String nowWall() => _dt.format(DateTime.now());
+  /// Difference between the business clock of the server (Syria time) and the clock of this device.
+  /// Every "now" / "today" of the app uses the server clock, never the phone's time or time zone.
+  static Duration _skew = Duration.zero;
+  static bool synced = false;
+
+  /// Called with the server's business wall time ('YYYY-MM-DD HH:mm:ss', header X-Business-Now).
+  static void syncServerNow(String? wall) {
+    if (wall == null || wall.length < 16) return;
+    final server = DateTime.tryParse(wall.substring(0, 19).replaceFirst(' ', 'T'));
+    if (server == null) return;
+    _skew = server.difference(DateTime.now());
+    synced = true;
+  }
+
+  /// Business "now" (server clock) as a wall-clock DateTime.
+  static DateTime now() => DateTime.now().add(_skew);
+
+  static String today() => _d.format(now());
+  static String nowWall() => _dt.format(now());
   static String dateOf(DateTime d) => _d.format(d);
   static String wallOf(DateTime d) => _dt.format(d);
-  static String thisMonth() => DateFormat('yyyy-MM').format(DateTime.now());
+  static String thisMonth() => DateFormat('yyyy-MM').format(now());
 
   static DateTime? parse(String? s) {
     if (s == null || s.length < 10) return null;

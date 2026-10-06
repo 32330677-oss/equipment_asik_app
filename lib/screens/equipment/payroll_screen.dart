@@ -130,7 +130,10 @@ class _PayrollScreenState extends State<PayrollScreen> {
                     DataCell(Text('#${r.str('eq_batch_id')}', style: const TextStyle(fontWeight: FontWeight.w700))),
                     DataCell(Text('${Fmt.date(r.str('start_date'))} - ${Fmt.date(r.str('end_date'))}')),
                     DataCell(Text(_scopeText(r))),
-                    DataCell(Pill(_batchLabel(r.str('status'), r.flag('is_finalized')), color: _batchColor(r.str('status'), r.flag('is_finalized')))),
+                    DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+                      Pill(_batchLabel(r.str('status'), r.flag('is_finalized')), color: _batchColor(r.str('status'), r.flag('is_finalized'))),
+                      if (r.intv('pending_requests') > 0) ...[const SizedBox(width: 6), const Pill('Request', color: AppColors.standby, icon: Icons.hourglass_top_rounded)],
+                    ])),
                     DataCell(Text('v${r.str('version_number')}')),
                     DataCell(Text(r.str('total_equipment'))),
                     DataCell(Text(Fmt.money2(r.strOrNull('total_gross'), r.str('currency')))),
@@ -178,7 +181,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
+    final now = Fmt.now();
     final first = DateTime(now.year, now.month - 1, 1);
     final last = DateTime(now.year, now.month, 0);
     _from = Fmt.dateOf(first);
@@ -361,7 +364,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
   }
 
   List<(String, String, String)> _quickRanges() {
-    final n = DateTime.now();
+    final n = Fmt.now();
     return [
       ('Last month', Fmt.dateOf(DateTime(n.year, n.month - 1, 1)), Fmt.dateOf(DateTime(n.year, n.month, 0))),
       ('This month', Fmt.dateOf(DateTime(n.year, n.month, 1)), Fmt.dateOf(DateTime(n.year, n.month + 1, 0))),
@@ -680,19 +683,65 @@ class _BatchScreenState extends State<BatchScreen> {
     if (ok) _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/mark-paid', {'paid_at': Fmt.nowWall()}), 'Marked as paid.');
   }
 
+  /// An Accountant asking to undo a FINALIZED batch: the Admin must approve (when only the Admin closes payroll).
+  bool get _needsApproval => Auth.I.isAccountant && (_b?.flag('is_finalized') ?? false);
+
   Future<void> _void() async {
-    final reason = await promptText(context, 'Void batch #${widget.id}', label: 'Reason', confirm: 'Void');
-    if (reason != null) _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/void', {'reason': reason}), 'Batch voided. Its rows can be paid again.');
+    final ask = _needsApproval;
+    final reason = await promptText(context, ask ? 'Ask the Admin to void batch #${widget.id}' : 'Void batch #${widget.id}',
+        label: 'Reason', confirm: ask ? 'Send request' : 'Void');
+    if (reason == null) return;
+    setState(() => _busy = true);
+    try {
+      final r = asJson(await Api.I.patch('/equipment/payroll/batches/${widget.id}/void', {'reason': reason}));
+      if (!mounted) return;
+      showSnack(context, r.obj('pending_request').isNotEmpty ? 'Request sent. The Admin must approve it before the batch is voided.' : 'Batch voided. Its rows can be paid again.');
+      await _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _decide(Json rq, bool approve) async {
+    final what = rq.str('action') == 'void' ? 'void this batch' : 'create a new version';
+    final note = await promptText(context, approve ? 'Approve: $what?' : 'Reject the request?',
+        label: approve ? 'Note (optional)' : 'Why (the accountant sees it)', required: !approve, confirm: approve ? 'Approve' : 'Reject');
+    if (note == null) return;
+    setState(() => _busy = true);
+    try {
+      final r = asJson(await Api.I.patch('/equipment/payroll/requests/${rq.str('request_id')}/${approve ? 'approve' : 'reject'}', {'note': note}));
+      if (!mounted) return;
+      showSnack(context, approve ? 'Request approved.' : 'Request rejected.');
+      if (approve && r.intv('eq_batch_id') != widget.id) {
+        Navigator.pushReplacement(context, MaterialPageRoute<void>(builder: (_) => BatchScreen(id: r.intv('eq_batch_id'))));
+        return;
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _supersede() async {
-    final reason = await promptText(context, 'New version of batch #${widget.id}', label: 'Why a new version?', confirm: 'Create version');
+    final ask = _needsApproval;
+    final reason = await promptText(context, ask ? 'Ask the Admin for a new version of batch #${widget.id}' : 'New version of batch #${widget.id}',
+        label: 'Why a new version?', confirm: ask ? 'Send request' : 'Create version');
     if (reason == null) return;
     Future<dynamic> run(bool accept) => Api.I.post('/equipment/payroll/batches/${widget.id}/supersede', {'reason': reason, 'accept_blockers': accept});
     setState(() => _busy = true);
     try {
       final r = asJson(await run(false));
       if (!mounted) return;
+      if (r.intv('eq_batch_id') == widget.id) {
+        showSnack(context, 'Request sent. The Admin must approve it before the new version is made.');
+        setState(() => _busy = false);
+        await _load();
+        return;
+      }
       Navigator.pushReplacement(context, MaterialPageRoute<void>(builder: (_) => BatchScreen(id: r.intv('eq_batch_id'))));
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -842,6 +891,25 @@ class _BatchScreenState extends State<BatchScreen> {
                 child: Text('Cancelled numbers (kept, never reused): ${cancelledInvoices.map((i) => i.str('invoice_no')).join(', ')}',
                     style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
               ),
+            if (b.obj('pending_request').isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: AppColors.standby.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.standby.withValues(alpha: 0.35))),
+                child: Row(children: [
+                  const Icon(Icons.hourglass_top_rounded, color: AppColors.standby),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                        '${b.obj('pending_request').str('requested_by')} asks to ${b.obj('pending_request').str('action') == 'void' ? 'VOID this batch' : 'make a NEW VERSION'}: ${b.obj('pending_request').str('reason')}'
+                        '${Auth.I.isAdmin ? '' : '\nWaiting for the Admin.'}'),
+                  ),
+                  if (Auth.I.isAdmin) ...[
+                    TextButton(onPressed: _busy ? null : () => _decide(b.obj('pending_request'), false), child: const Text('Reject')),
+                    FilledButton(onPressed: _busy ? null : () => _decide(b.obj('pending_request'), true), child: const Text('Approve')),
+                  ],
+                ]),
+              ),
             if (b.strOrNull('void_reason') != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('Void reason: ${b.str('void_reason')}', style: const TextStyle(color: AppColors.breakdown))),
             if (b.strOrNull('supersede_reason') != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('Version reason: ${b.str('supersede_reason')}', style: const TextStyle(color: AppColors.muted))),
             const SizedBox(height: 14),
@@ -875,8 +943,8 @@ class _BatchScreenState extends State<BatchScreen> {
               if (hasFuelDiff) OutlinedButton.icon(onPressed: () => _pdf('fueldiff', suffix: 'fuel-difference'), icon: const Icon(Icons.local_gas_station_rounded), label: const Text('Fuel difference statements')),
               if (canFinalize) FilledButton.icon(onPressed: _busy || b.flag('stale') ? null : _finalize, icon: const Icon(Icons.lock_rounded), label: const Text('Finalize')),
               if (canPay) FilledButton.icon(onPressed: _busy ? null : _markPaid, icon: const Icon(Icons.paid_rounded), label: const Text('Mark paid'), style: FilledButton.styleFrom(backgroundColor: AppColors.working)),
-              if (canSupersede) OutlinedButton.icon(onPressed: _busy ? null : _supersede, icon: const Icon(Icons.difference_rounded), label: const Text('New version')),
-              if (canVoid) OutlinedButton.icon(onPressed: _busy ? null : _void, icon: const Icon(Icons.block_rounded, color: AppColors.breakdown), label: const Text('Void', style: TextStyle(color: AppColors.breakdown))),
+              if (canSupersede) OutlinedButton.icon(onPressed: _busy || b.obj('pending_request').isNotEmpty ? null : _supersede, icon: const Icon(Icons.difference_rounded), label: Text(_needsApproval ? 'Ask for new version' : 'New version')),
+              if (canVoid) OutlinedButton.icon(onPressed: _busy || b.obj('pending_request').isNotEmpty ? null : _void, icon: const Icon(Icons.block_rounded, color: AppColors.breakdown), label: Text(_needsApproval ? 'Ask to void' : 'Void', style: const TextStyle(color: AppColors.breakdown))),
             ]),
           ]),
         ),

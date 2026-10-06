@@ -262,7 +262,7 @@ class _MachineCard extends StatelessWidget {
     String? running;
     if (hasRow && att.strOrNull('check_in_time') != null && att.strOrNull('check_out_time') == null) {
       final start = Fmt.parse(att.str('check_in_time'));
-      if (start != null) running = Fmt.duration(DateTime.now().difference(start).inMinutes);
+      if (start != null) running = Fmt.duration(Fmt.now().difference(start).inMinutes);
     }
 
     final List<Widget> actions = [];

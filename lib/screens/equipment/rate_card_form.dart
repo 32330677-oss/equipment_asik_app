@@ -48,7 +48,6 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
   final _daily = TextEditingController();
   final _monthly = TextEditingController();
   final _stdHours = TextEditingController(text: '8');
-  final _minHours = TextEditingController();
   bool _ot = false;
   final _otThreshold = TextEditingController();
   final _otRate = TextEditingController();
@@ -102,7 +101,6 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       _daily.text = t('daily_rate');
       _monthly.text = t('monthly_rate');
       _stdHours.text = t('standard_hours_per_day');
-      _minHours.text = t('min_billable_hours_per_day');
       _ot = c.flag('overtime_enabled');
       _otThreshold.text = t('overtime_threshold_hours');
       _otRate.text = t('overtime_rate');
@@ -178,7 +176,8 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       'daily_rate': _mode == 'Daily' ? numOrNull(_daily) : null,
       'monthly_rate': _mode == 'Monthly' ? numOrNull(_monthly) : null,
       'standard_hours_per_day': numOrNull(_stdHours),
-      'min_billable_hours_per_day': _mode == 'Monthly' ? null : numOrNull(_minHours),
+      // no minimum billable hours: not used by the company (an old value is cleared when the card is saved)
+      'min_billable_hours_per_day': null,
       // Monthly: overtime is always counted (hours above the hours due), at the month's hourly price unless a price is typed.
       'overtime_enabled': _mode == 'Monthly' ? true : _ot,
       'overtime_threshold_hours': _mode != 'Monthly' && _ot ? numOrNull(_otThreshold) : null,
@@ -350,7 +349,6 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               if (_mode == 'Daily') textField(_daily, 'Price per day', number: true, required: true),
               if (_mode == 'Monthly') textField(_monthly, 'Price per month', number: true, required: true),
               textField(_stdHours, _mode == 'Monthly' ? 'Working hours per day at the site' : 'Standard hours per day', number: true, required: true, suffix: 'h'),
-              if (_mode != 'Monthly') textField(_minHours, 'Minimum billable hours per day', number: true, suffix: 'h', hint: 'empty = no minimum'),
               if (_mode == 'Monthly') textField(_otRate, 'Overtime price per hour', number: true, hint: 'empty = the hourly price of the month'),
               if (_mode == 'Daily')
                 Dropdown<String>(label: 'Partial day', value: _partial, width: null, items: const [

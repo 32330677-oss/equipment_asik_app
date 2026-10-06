@@ -59,7 +59,7 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
   Widget build(BuildContext context) {
     final sites = _s.data ?? <Json>[];
     final isToday = _date == Fmt.today();
-    final hour = DateTime.now().hour;
+    final hour = Fmt.now().hour;
     final greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
     return Scaffold(
       appBar: AppBar(

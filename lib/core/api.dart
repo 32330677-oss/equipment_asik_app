@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'config.dart';
+import 'fmt.dart';
 import 'json.dart';
 
 /// Every error coming from the API (or the network) as one type.
@@ -14,7 +16,8 @@ class ApiException implements Exception {
   final String message;
   final Json? details;
 
-  bool get isNetwork => code == 'NETWORK';
+  /// No answer from the server (no internet, server down, timeout): nothing was saved, the user may retry.
+  bool get isNetwork => code == 'NETWORK' || code == 'TIMEOUT';
 
   @override
   String toString() => message;
@@ -36,7 +39,12 @@ class Api {
         if (t != null && t.isNotEmpty) options.headers['Authorization'] = 'Bearer $t';
         handler.next(options);
       },
+      onResponse: (response, handler) {
+        Fmt.syncServerNow(response.headers.value('x-business-now'));
+        handler.next(response);
+      },
       onError: (error, handler) {
+        Fmt.syncServerNow(error.response?.headers.value('x-business-now'));
         final status = error.response?.statusCode;
         final path = error.requestOptions.path;
         final data = error.response?.data;
@@ -105,18 +113,37 @@ class Api {
           m.objOrNull('details'),
         );
       }
-      if (e.type == DioExceptionType.connectionError ||
-          e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.unknown) {
-        return ApiException(null, 'NETWORK',
-            'Cannot reach the server (${AppConfig.apiBaseUrl}). Check your connection - nothing was saved.');
+      switch (e.type) {
+        case DioExceptionType.connectionError:
+        case DioExceptionType.connectionTimeout:
+        case DioExceptionType.unknown:
+          return ApiException(null, 'NETWORK', 'No connection to the server. Check the internet (Wi-Fi or mobile data) and try again. Nothing was saved.');
+        case DioExceptionType.receiveTimeout:
+        case DioExceptionType.sendTimeout:
+          return ApiException(null, 'TIMEOUT', 'The connection is slow and the server did not answer in time. Try again in a moment.');
+        default:
+          break;
       }
-      if (e.type == DioExceptionType.receiveTimeout || e.type == DioExceptionType.sendTimeout) {
-        return ApiException(null, 'TIMEOUT', 'The server took too long to answer. Please try again.');
-      }
-      return ApiException(e.response?.statusCode, 'HTTP_${e.response?.statusCode ?? 0}', 'Request failed (${e.response?.statusCode ?? '-'}).');
+      return ApiException(e.response?.statusCode, 'HTTP_${e.response?.statusCode ?? 0}', _httpMessage(e.response?.statusCode, e.response?.headers.value('x-request-id')));
     }
-    return ApiException(null, 'ERROR', e.toString());
+    return ApiException(null, 'ERROR', 'Something went wrong. Please try again.');
+  }
+
+  /// Clear words for errors that come without a message from the server.
+  static String _httpMessage(int? status, String? requestId) {
+    final ref = requestId == null ? '' : ' (reference: ${requestId.length > 8 ? requestId.substring(0, 8) : requestId})';
+    switch (status) {
+      case 400: return 'Some information is missing or wrong. Check the form and try again.';
+      case 401: return 'Please sign in again.';
+      case 403: return 'Your account is not allowed to do this.';
+      case 404: return 'This record was not found. It may have been deleted. Refresh the page.';
+      case 409: return 'This was changed by someone else meanwhile. Refresh and try again.';
+      case 413: return 'The file is too large. Use a smaller photo or PDF.';
+      case 415: return 'This file type is not accepted. Use a PDF, JPG or PNG.';
+      case 429: return 'Too many attempts. Wait a minute and try again.';
+      case 502: case 503: case 504: return 'The server is restarting or busy. Try again in a minute.';
+      default: return 'Something went wrong on the server. Try again; if it happens again, tell the administrator$ref.';
+    }
   }
 
   /// "Some fields are invalid." + the first field messages.
@@ -165,10 +192,12 @@ class Api {
       final raw = e.response?.data;
       if (raw is List<int>) {
         try {
-          final text = String.fromCharCodes(raw);
-          final m = RegExp(r'"message"\s*:\s*"([^"]+)"').firstMatch(text);
-          final c = RegExp(r'"code"\s*:\s*"([^"]+)"').firstMatch(text);
-          if (m != null) throw ApiException(e.response?.statusCode, c?.group(1) ?? 'ERROR', m.group(1)!);
+          // UTF-8 (Arabic names and messages stay readable), then the normal JSON error envelope
+          final body = jsonDecode(utf8.decode(raw, allowMalformed: true));
+          if (body is Map) {
+            final m = asJson(body);
+            throw ApiException(e.response?.statusCode, m.str('code', 'ERROR'), _withFieldErrors(m), m.objOrNull('details'));
+          }
         } on ApiException {
           rethrow;
         } catch (_) {}

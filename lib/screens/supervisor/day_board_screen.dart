@@ -130,10 +130,12 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
               }
               if (v == 'refresh') _load();
               if (v == 'recall') _recallDay();
+              if (v == 'requests') Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const MyChangeRequestsScreen()));
             },
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'refresh', child: ListTile(leading: Icon(Icons.refresh_rounded), title: Text('Refresh'))),
               const PopupMenuItem(value: 'pdf', child: ListTile(leading: Icon(Icons.picture_as_pdf_rounded), title: Text('Daily report PDF'))),
+              const PopupMenuItem(value: 'requests', child: ListTile(leading: Icon(Icons.forward_to_inbox_rounded), title: Text('My change requests'))),
               if ((d?.obj('submit').intv('submitted_rows') ?? 0) > 0)
                 PopupMenuItem(
                     value: 'recall',
@@ -175,6 +177,7 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
                                   ),
                                 ]),
                               ),
+                            if (!d.obj('access').flag('can_edit') && d.obj('access').isNotEmpty) _ReadOnlyBanner(reason: d.obj('access').str('reason')),
                             _SummaryStrip(summary: d.obj('summary')),
                             const SizedBox(height: 12),
                             if (d.list('machines').isEmpty)
@@ -184,6 +187,7 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
                                 _MachineCard(
                                   m: m,
                                   date: _date,
+                                  access: d.obj('access'),
                                   onAction: (fut) => _after(fut),
                                   siteId: widget.siteId,
                                   shift: widget.shift,
@@ -196,6 +200,24 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
                   ),
                 ),
     );
+  }
+}
+
+/// "Historical visibility is not editing permission": the day is shown, the actions are hidden, and the banner says
+/// what the supervisor can do instead.
+class _ReadOnlyBanner extends StatelessWidget {
+  const _ReadOnlyBanner({required this.reason});
+  final String reason;
+  @override
+  Widget build(BuildContext context) {
+    final text = switch (reason) {
+      'moved_away' => 'You no longer supervise this site and shift, so this day is read-only. '
+          'If something is wrong, tell the current supervisor or the office.',
+      'before_assignment' => 'This day is before you became supervisor of this site and shift: you can see it, but not change it. '
+          'Open a row and use "Ask the office" to request a change.',
+      _ => 'You can see this day but not change it.',
+    };
+    return NoticeBox(color: AppColors.navy, icon: Icons.visibility_rounded, title: 'Read only', text: text);
   }
 }
 
@@ -239,9 +261,11 @@ class _SummaryStrip extends StatelessWidget {
 }
 
 class _MachineCard extends StatelessWidget {
-  const _MachineCard({required this.m, required this.date, required this.onAction, required this.siteId, required this.shift, required this.onChanged});
+  const _MachineCard(
+      {required this.m, required this.date, required this.onAction, required this.siteId, required this.shift, required this.onChanged, this.access = const {}});
   final Json m;
   final String date;
+  final Json access;
   final int siteId;
   final String shift;
   final void Function(Future<bool?>) onAction;
@@ -254,7 +278,8 @@ class _MachineCard extends StatelessWidget {
     final state = m.str('live_state');
     final style = StateStyle.of(state);
     final status = att.str('status', 'Draft');
-    final editable = !hasRow || status == 'Draft' || status == 'Rejected';
+    final canEdit = access.isEmpty || access.flag('can_edit');
+    final editable = canEdit && (!hasRow || status == 'Draft' || status == 'Rejected');
     final open = att.objOrNull('open_downtime');
     final recordDate = att.str('record_date', date);
 
@@ -270,9 +295,9 @@ class _MachineCard extends StatelessWidget {
       switch (state) {
         case 'NotArrived':
           actions.add(_primary('Check in', Icons.login_rounded, AppColors.working,
-              () => onAction(checkInSheet(context, machine: m, siteId: siteId, shift: shift, date: date))));
+              () => onAction(checkInSheet(context, machine: m, siteId: siteId, shift: shift, date: date, access: access))));
           actions.add(_secondary('Did not work', Icons.event_busy_rounded,
-              () => onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date))));
+              () => onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date, access: access))));
           break;
         case 'Working':
           actions.add(_primary('Check out', Icons.logout_rounded, AppColors.navy,
@@ -287,15 +312,15 @@ class _MachineCard extends StatelessWidget {
                 () => onAction(endDowntimeSheet(context, att: att, date: recordDate))));
           } else {
             actions.add(_secondary('Change', Icons.edit_calendar_rounded,
-                () => onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date, initial: state))));
+                () => onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date, initial: state, access: access))));
           }
           break;
         case 'Absent':
         case 'Holiday':
           actions.add(_secondary('It came after all', Icons.login_rounded,
-              () => onAction(checkInSheet(context, machine: m, siteId: siteId, shift: shift, date: date))));
+              () => onAction(checkInSheet(context, machine: m, siteId: siteId, shift: shift, date: date, access: access))));
           actions.add(_secondary('Change', Icons.edit_calendar_rounded,
-              () => onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date, initial: state))));
+              () => onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date, initial: state, access: access))));
           break;
       }
     }
@@ -329,6 +354,7 @@ class _MachineCard extends StatelessWidget {
                 StatePill(state),
                 if (hasRow && status != 'Draft') Padding(padding: const EdgeInsets.only(top: 4), child: WorkflowPill(status)),
                 if (att.flag('from_previous_day')) const Padding(padding: EdgeInsets.only(top: 4), child: Pill('Since yesterday', color: AppColors.standby)),
+                if (att.flag('late_entry')) const Padding(padding: EdgeInsets.only(top: 4), child: Pill('Late entry', color: AppColors.standby, icon: Icons.history_toggle_off_rounded)),
               ]),
             ]),
             if (hasRow) ...[
@@ -437,7 +463,12 @@ class _MachineCard extends StatelessWidget {
       isScrollControlled: true,
       showDragHandle: true,
       useSafeArea: true,
-      builder: (_) => RowDetailSheet(att: m.obj('attendance'), vendorId: m.intv('vendor_id')),
+      builder: (_) => RowDetailSheet(
+        att: m.obj('attendance'),
+        vendorId: m.intv('vendor_id'),
+        canEdit: access.isEmpty || access.flag('can_edit'),
+        denial: access.strOrNull('reason'),
+      ),
     );
     onChanged();
   }
@@ -486,9 +517,13 @@ class _SubmitBar extends StatelessWidget {
 
 /// Everything about one row: times, downtime list (with delete), edit, delete, resubmit.
 class RowDetailSheet extends StatefulWidget {
-  const RowDetailSheet({super.key, required this.att, this.vendorId});
+  const RowDetailSheet({super.key, required this.att, this.vendorId, this.canEdit = true, this.denial});
   final Json att;
   final int? vendorId;
+  /// false when the supervisor may only read this day (moved away, or a day before their assignment)
+  final bool canEdit;
+  /// why not: 'moved_away' / 'before_assignment' / ...
+  final String? denial;
   @override
   State<RowDetailSheet> createState() => _RowDetailSheetState();
 }
@@ -496,7 +531,11 @@ class RowDetailSheet extends StatefulWidget {
 class _RowDetailSheetState extends State<RowDetailSheet> {
   late Json _a = widget.att;
 
-  bool get _editable => _a.str('status') == 'Draft' || _a.str('status') == 'Rejected';
+  bool get _editable => widget.canEdit && (_a.str('status') == 'Draft' || _a.str('status') == 'Rejected');
+
+  /// The supervisor asks the office: an Approved row of their site, or a day before their assignment.
+  bool get _canAskOffice =>
+      _a.str('status') != 'Cancelled' && ((widget.canEdit && _a.str('status') == 'Approved') || widget.denial == 'before_assignment');
 
   Future<void> _reload() async {
     // the row view comes back from any write; read it through the rejected list or the site board otherwise
@@ -528,6 +567,35 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
     } catch (e) {
       if (mounted) showError(context, e);
     }
+  }
+
+  Future<void> _editDowntime(Json p) async {
+    final ok = await downtimeEditSheet(context, att: _a, period: p);
+    if (ok == true) await _reload();
+  }
+
+  /// A Rejected row that should not exist (wrong machine, wrong day): kept for history as Cancelled, never deleted.
+  Future<void> _cancelRow() async {
+    final reason = await promptText(context, 'Cancel this row?',
+        label: 'Why should this row not exist?',
+        minLength: 5,
+        confirm: 'Cancel the row',
+        help: 'Use this when the record is wrong as a whole (wrong machine, wrong day, duplicate). '
+            'The row stays in the history as Cancelled. Write "cancelled" on row #${_a.obj('sheet').str('sheet_row_no')} of the paper sheet too.');
+    if (reason == null) return;
+    try {
+      final r = asJson(await Api.I.patch('/equipment/attendance/${_a.intv('eq_attendance_id')}/cancel', {'reason': reason}));
+      if (!mounted) return;
+      setState(() => _a = r);
+      showSnack(context, 'Row cancelled.');
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  Future<void> _askOffice() async {
+    final ok = await changeRequestSheet(context, att: _a);
+    if (ok == true && mounted) Navigator.pop(context);
   }
 
   Future<void> _recall() async {
@@ -568,6 +636,28 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
           WorkflowPill(a.str('status')),
         ]),
         const SizedBox(height: 12),
+        if (!widget.canEdit && a.str('status') != 'Cancelled')
+          NoticeBox(
+            color: AppColors.navy,
+            icon: Icons.visibility_rounded,
+            text: widget.denial == 'before_assignment'
+                ? 'This day is before your assignment to the site: ask the office to change it.'
+                : 'Read only: you no longer supervise this site and shift.',
+          ),
+        if (a.str('status') == 'Cancelled')
+          NoticeBox(
+            color: AppColors.neutral,
+            icon: Icons.block_rounded,
+            title: 'Cancelled',
+            text: '${a.str('cancel_reason', 'No reason given')}${a.strOrNull('cancelled_at') == null ? '' : '  (${Fmt.date(a.str('cancelled_at'))})'}',
+          ),
+        if (a.flag('late_entry'))
+          NoticeBox(
+            color: AppColors.standby,
+            icon: Icons.history_toggle_off_rounded,
+            title: 'Late entry (${a.intv('late_entry_days')} days after the day)',
+            text: a.strOrNull('late_entry_reason') ?? 'No reason given. The office sees this row as a late entry.',
+          ),
         if (a.strOrNull('admin_rejection_notes') != null && a.str('status') == 'Rejected')
           Container(
             margin: const EdgeInsets.only(bottom: 12),
@@ -604,12 +694,17 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
                       color: StateStyle.of(p.str('downtime_type') == 'Break' || p.str('downtime_type') == 'Refuel' ? 'OnBreak' : p.str('downtime_type')).color),
                   title: Text('${p.str('downtime_type')}  ${Fmt.time(p.str('start_time'))} - ${p.strOrNull('end_time') == null ? 'now' : Fmt.time(p.str('end_time'))}'),
                   subtitle: p.strOrNull('reason') == null ? null : Text(p.str('reason')),
-                  trailing: _editable ? IconButton(icon: const Icon(Icons.delete_outline_rounded, color: AppColors.breakdown), onPressed: () => _deleteDowntime(p)) : null,
+                  trailing: _editable
+                      ? Row(mainAxisSize: MainAxisSize.min, children: [
+                          IconButton(tooltip: 'Correct', icon: const Icon(Icons.edit_rounded), onPressed: () => _editDowntime(p)),
+                          IconButton(tooltip: 'Delete', icon: const Icon(Icons.delete_outline_rounded, color: AppColors.breakdown), onPressed: () => _deleteDowntime(p)),
+                        ])
+                      : null,
                 ),
             ]),
           ),
         ],
-        if (a.str('status') == 'Submitted') ...[
+        if (widget.canEdit && a.str('status') == 'Submitted') ...[
           const SizedBox(height: 14),
           Row(children: [
             const Expanded(child: Text('Sent to the office, not approved yet. Recall it to fix a mistake.', style: TextStyle(color: AppColors.muted, fontSize: 13))),
@@ -634,9 +729,118 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
                 icon: const Icon(Icons.delete_outline_rounded, color: AppColors.breakdown),
                 label: const Text('Delete', style: TextStyle(color: AppColors.breakdown)),
               ),
+            // a row the office approved once is voided by the office, never cancelled by the supervisor
+            if (a.str('status') == 'Rejected' && !a.flag('was_approved'))
+              OutlinedButton.icon(
+                onPressed: _cancelRow,
+                icon: const Icon(Icons.block_rounded, color: AppColors.breakdown),
+                label: const Text('Cancel the row', style: TextStyle(color: AppColors.breakdown)),
+              ),
+          ]),
+        ],
+        if (_canAskOffice) ...[
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+              child: Text(
+                a.str('status') == 'Approved' ? 'Approved by the office. Something wrong? Ask the office to change it.' : 'Something wrong? Ask the office to change it.',
+                style: const TextStyle(color: AppColors.muted, fontSize: 13),
+              ),
+            ),
+            OutlinedButton.icon(onPressed: _askOffice, icon: const Icon(Icons.forward_to_inbox_rounded), label: const Text('Ask the office')),
           ]),
         ],
       ]),
+    );
+  }
+}
+
+/// The supervisor's change requests and the office's answers; a pending one can be withdrawn.
+class MyChangeRequestsScreen extends StatefulWidget {
+  const MyChangeRequestsScreen({super.key});
+  @override
+  State<MyChangeRequestsScreen> createState() => _MyChangeRequestsScreenState();
+}
+
+class _MyChangeRequestsScreenState extends State<MyChangeRequestsScreen> {
+  final _s = Loadable<List<Json>>();
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _s.loading = true; _s.error = null; });
+    try {
+      _s.data = await Api.I.getList('/equipment/attendance/change-requests');
+    } catch (e) {
+      _s.error = e;
+    }
+    if (mounted) setState(() => _s.loading = false);
+  }
+
+  Future<void> _withdraw(Json r) async {
+    final ok = await confirmDialog(context, 'Withdraw this request?', 'The office will not see it any more. Nothing on the row changes.', confirm: 'Withdraw');
+    if (!ok) return;
+    try {
+      await Api.I.patch('/equipment/attendance/change-requests/${r.intv('change_request_id')}/withdraw');
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = _s.data ?? <Json>[];
+    return Scaffold(
+      appBar: AppBar(title: const Text('My change requests')),
+      body: _s.loading && _s.data == null
+          ? const LoadingView()
+          : _s.error != null
+              ? ErrorView(error: _s.error!, onRetry: _load)
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView(padding: const EdgeInsets.all(12), children: [
+                    if (rows.isEmpty) const Card(child: EmptyView(text: 'You have not asked the office for any change.', icon: Icons.forward_to_inbox_rounded)),
+                    for (final r in rows)
+                      Card(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Row(children: [
+                              Expanded(
+                                child: Text('${r.str('equipment_code')} · ${r.str('site_code')} · ${Fmt.dayLabel(r.str('record_date'))}',
+                                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                              ),
+                              Pill(r.str('status'),
+                                  color: switch (r.str('status')) {
+                                    'Applied' => AppColors.working,
+                                    'Rejected' => AppColors.breakdown,
+                                    'Pending' => AppColors.info,
+                                    _ => AppColors.neutral,
+                                  }),
+                            ]),
+                            const SizedBox(height: 6),
+                            for (final e in r.obj('proposed_changes').entries)
+                              Text('${fieldLabel(e.key)}: ${valueLabel(e.value)}', style: const TextStyle(fontSize: 13)),
+                            const SizedBox(height: 4),
+                            Text('Reason: ${r.str('reason')}', style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+                            if (r.strOrNull('decision_note') != null)
+                              Text('Office: ${r.str('decision_note')}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                            if (r.str('status') == 'Pending')
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton.icon(onPressed: () => _withdraw(r), icon: const Icon(Icons.undo_rounded), label: const Text('Withdraw')),
+                              ),
+                          ]),
+                        ),
+                      ),
+                  ]),
+                ),
     );
   }
 }

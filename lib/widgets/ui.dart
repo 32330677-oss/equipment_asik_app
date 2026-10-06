@@ -39,8 +39,11 @@ Future<bool> confirmDialog(BuildContext context, String title, String message, {
 }
 
 /// Asks for a text (reason, note...). Returns null when cancelled.
+///
+/// [minLength] (with [required]) asks for a real explanation: the server refuses shorter reasons on controlled actions.
+/// [help] is shown above the field (what happens next, who sees the reason).
 Future<String?> promptText(BuildContext context, String title,
-    {String label = 'Reason', String? initial, bool required = true, int maxLines = 3, String confirm = 'Save'}) async {
+    {String label = 'Reason', String? initial, bool required = true, int maxLines = 3, String confirm = 'Save', int minLength = 0, String? help}) async {
   final c = TextEditingController(text: initial ?? '');
   final key = GlobalKey<FormState>();
   final r = await showDialog<String>(
@@ -51,13 +54,21 @@ Future<String?> promptText(BuildContext context, String title,
         width: 420,
         child: Form(
           key: key,
-          child: TextFormField(
-            controller: c,
-            autofocus: true,
-            maxLines: maxLines,
-            decoration: InputDecoration(labelText: label),
-            validator: (v) => required && (v == null || v.trim().isEmpty) ? 'Required' : null,
-          ),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (help != null) Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(help, style: const TextStyle(color: AppColors.muted, fontSize: 13))),
+            TextFormField(
+              controller: c,
+              autofocus: true,
+              maxLines: maxLines,
+              decoration: InputDecoration(labelText: label),
+              validator: (v) {
+                final t = (v ?? '').trim();
+                if (required && t.isEmpty) return 'Required';
+                if (required && minLength > 0 && t.length < minLength) return 'Write at least $minLength characters';
+                return null;
+              },
+            ),
+          ]),
         ),
       ),
       actions: [
@@ -310,6 +321,8 @@ class WorkflowPill extends StatelessWidget {
       'Submitted' => AppColors.info,
       'Approved' => AppColors.working,
       'Rejected' => AppColors.breakdown,
+      'Cancelled' => AppColors.neutral,
+      'Finalized' => AppColors.navy,
       'Paid' => AppColors.working,
       'Generated' => AppColors.info,
       'Voided' || 'Superseded' => AppColors.neutral,
@@ -499,3 +512,82 @@ class Dropdown<T> extends StatelessWidget {
 
 /// Reads 'details.blockers' style lists from an ApiException for friendly messages.
 List<Json> detailList(Object e, String key) => e is ApiException && e.details != null ? e.details!.list(key) : <Json>[];
+
+/// Coloured notice box (blocked action, read-only day, late entry...): an icon, a message and an optional action.
+class NoticeBox extends StatelessWidget {
+  const NoticeBox({super.key, required this.text, this.color = AppColors.info, this.icon = Icons.info_outline_rounded, this.title, this.action});
+  final String text;
+  final String? title;
+  final Color color;
+  final IconData icon;
+  final Widget? action;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, color: color),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            if (title != null) Text(title!, style: TextStyle(color: color, fontWeight: FontWeight.w800)),
+            Text(text, style: const TextStyle(fontSize: 13)),
+          ]),
+        ),
+        if (action != null) ...[const SizedBox(width: 8), action!],
+      ]),
+    );
+  }
+}
+
+/// Readable label of a field name coming from the API ('check_out_time' -> 'check out time').
+String fieldLabel(String key) => const {
+      'day_status': 'Day status', 'check_in_time': 'Check-in', 'check_out_time': 'Check-out', 'operator_id': 'Operator',
+      'meter_start': 'Meter start', 'meter_end': 'Meter end', 'work_description': 'Work done', 'remarks': 'Remarks',
+      'standby_credit_hours': 'Standby hours', 'standby_credit_minutes': 'Standby minutes', 'downtime': 'Pauses', 'cancel_row': 'Cancel the row',
+      'status': 'Status', 'paper_status': 'Paper', 'liters': 'Litres', 'price_per_liter': 'Price per litre',
+    }[key] ??
+    key.replaceAll('_', ' ');
+
+/// Short text of a value for history lines (lists = count, null = empty).
+String valueLabel(Object? v) {
+  if (v == null) return '(empty)';
+  if (v is List) return '${v.length} item(s)';
+  if (v is Map) return '{...}';
+  final s = '$v';
+  return s.length > 40 ? '${s.substring(0, 40)}...' : s;
+}
+
+/// "field: old -> new" lines of an audit changed_fields object ({field: [old, new]}).
+List<String> changedFieldLines(Object? changed) {
+  if (changed is! Map) return const [];
+  return [
+    for (final e in changed.entries)
+      if (e.value is List && (e.value as List).length == 2)
+        '${fieldLabel('${e.key}')}: ${valueLabel((e.value as List)[0])} -> ${valueLabel((e.value as List)[1])}',
+  ];
+}
+
+/// Human text of the warnings an API envelope carries (late entry, ignored fuel...).
+String? warningsText(Json envelope) {
+  final w = envelope['warnings'];
+  if (w is! List || w.isEmpty) return null;
+  final parts = <String>[];
+  for (final x in w) {
+    if (x is Map) {
+      final m = asJson(x);
+      parts.add(m.str('message', m.str('code')));
+    } else if ('$x' == 'FUEL_AT_CHECKOUT_NOT_RECORDED') {
+      parts.add('Fuel is not recorded at check-out (the office records fuel issues).');
+    } else {
+      parts.add('$x'.replaceAll('_', ' ').toLowerCase());
+    }
+  }
+  return parts.join(' ');
+}

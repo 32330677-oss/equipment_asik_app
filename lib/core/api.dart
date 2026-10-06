@@ -174,7 +174,7 @@ class Api {
   Future<dynamic> post(String path, [Object? body]) async => (await request('POST', path, body: body ?? <String, dynamic>{}))['data'];
   Future<dynamic> put(String path, [Object? body]) async => (await request('PUT', path, body: body ?? <String, dynamic>{}))['data'];
   Future<dynamic> patch(String path, [Object? body]) async => (await request('PATCH', path, body: body ?? <String, dynamic>{}))['data'];
-  Future<dynamic> delete(String path) async => (await request('DELETE', path))['data'];
+  Future<dynamic> delete(String path, [Object? body]) async => (await request('DELETE', path, body: body))['data'];
 
   Future<List<Json>> getList(String path, {Map<String, dynamic>? query}) async => asJsonList(await get(path, query: query));
   Future<Json> getObj(String path, {Map<String, dynamic>? query}) async => asJson(await get(path, query: query));

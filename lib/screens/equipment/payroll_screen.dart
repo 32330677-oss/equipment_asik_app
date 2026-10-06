@@ -11,7 +11,7 @@ import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 
 /// Shown with the blockers but never stop the generation.
-const _infoOnly = {'IN_OTHER_BATCH', 'SCAN_MISSING'};
+const _infoOnly = {'IN_OTHER_BATCH', 'SCAN_MISSING', 'IN_CLOSED_PERIOD'};
 
 const _blockerHelp = {
   'NOT_APPROVED': 'Approve or reject them in Attendance review.',
@@ -24,6 +24,27 @@ const _blockerHelp = {
   'IN_OTHER_BATCH': 'Already paid in another batch; they are skipped.',
   'FUEL_PRICE_MISSING': 'Add the official fuel price for these dates in Fuel & adjustments > Fuel prices.',
   'SCAN_MISSING': 'Information only: the accountant must upload these signed sheets (Paper sheets) before the Admin finalizes.',
+  'IN_CLOSED_PERIOD': 'Information only: these dates are in a finalized (closed) period. No new batch pays them: '
+      'use an official Correction from Attendance review (or from the paid batch item).',
+};
+
+/// Accepting blockers is a decision kept on the batch: ask why (at least 5 characters).
+Future<String?> askAcceptReason(BuildContext context) => promptText(context, 'Why generate with open problems?',
+    label: 'Reason (kept on the batch and shown to whoever finalizes it)',
+    minLength: 5,
+    confirm: 'Generate anyway',
+    help: 'Rows with problems are left out of this batch. They can be paid later in another batch of an OPEN period.');
+
+/// Human labels of the manual changes a batch pays (finalize review).
+const _reviewKinds = {
+  'edited_after_approval': 'Row edited after approval',
+  'late_entry': 'Late entry',
+  'standby_hours': 'Standby hours decided',
+  'adjustment': 'Manual adjustment',
+  'correction_settlement': 'Correction settlement',
+  'fuel_changed': 'Fuel issue changed',
+  'rate_card_changed': 'Rate card changed',
+  'accepted_blockers': 'Generated with open problems',
 };
 
 Color _batchColor(String status, bool finalized) {
@@ -199,6 +220,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
 
   void _changed(VoidCallback fn) => setState(() {
         fn();
+        _acceptReason = null;
         _blockers = null;
         _preview = null;
         _previewError = null;
@@ -222,17 +244,18 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
 
   bool get _hasBlocking => (_blockers ?? []).any((b) => !_infoOnly.contains(b.str('code')));
 
+  String? _acceptReason;
+
   Future<void> _generate({bool accept = false, String? currency}) async {
     if (_hasBlocking && !accept) {
-      final ok = await confirmDialog(context, 'Generate with open problems?',
-          'Rows with problems are left out of this batch. They can be paid later in another batch.\n\nContinue?',
-          confirm: 'Generate anyway', danger: true);
-      if (!ok) return;
+      final why = await askAcceptReason(context);
+      if (why == null) return;
+      _acceptReason = why;
       accept = true;
     }
     setState(() => _busy = true);
     try {
-      final body = {..._scope, 'accept_blockers': accept, if (currency != null) 'currency': currency};
+      final body = {..._scope, 'accept_blockers': accept, if (accept && _acceptReason != null) 'accept_reason': _acceptReason, if (currency != null) 'currency': currency};
       final r = await Api.I.request('POST', '/equipment/payroll/generate', body: body);
       final b = asJson(r['data']);
       final warnings = asJsonList(r['warnings']);
@@ -251,8 +274,10 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
       }
       if (e.code == 'BLOCKERS_PRESENT') {
         setState(() => _blockers = asJsonList(e.details?['blockers']));
-        final ok = await confirmDialog(context, 'Generate with open problems?', e.message, confirm: 'Generate anyway', danger: true);
-        if (ok) await _generate(accept: true, currency: currency);
+        final why = await askAcceptReason(context);
+        if (why == null) return;
+        _acceptReason = why;
+        await _generate(accept: true, currency: currency);
         return;
       }
       showError(context, e);
@@ -424,10 +449,12 @@ class _BlockersCard extends StatelessWidget {
 
 /// One machine line of a preview / batch with its calculation lines.
 class _ItemTile extends StatelessWidget {
-  const _ItemTile({required this.item, this.preview = false, this.onRows, this.onPdf, this.onFuelPdf});
+  const _ItemTile({required this.item, this.preview = false, this.onRows, this.onPdf, this.onFuelPdf, this.onCorrect});
   final Json item;
   final bool preview;
   final VoidCallback? onRows;
+  /// finalized batch: official correction of money on this item (fuel, rate card, other)
+  final VoidCallback? onCorrect;
   final VoidCallback? onPdf;
   final VoidCallback? onFuelPdf;
 
@@ -530,13 +557,14 @@ class _ItemTile extends StatelessWidget {
                   ]),
                 ),
             ],
-            if (onRows != null || onPdf != null || onFuelPdf != null)
+            if (onRows != null || onPdf != null || onFuelPdf != null || onCorrect != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Wrap(spacing: 8, children: [
                   if (onRows != null) TextButton.icon(onPressed: onRows, icon: const Icon(Icons.list_alt_rounded, size: 18), label: const Text('Daily rows')),
                   if (onPdf != null) TextButton.icon(onPressed: onPdf, icon: const Icon(Icons.picture_as_pdf_rounded, size: 18), label: const Text('Machine invoice')),
                   if (onFuelPdf != null) TextButton.icon(onPressed: onFuelPdf, icon: const Icon(Icons.local_gas_station_rounded, size: 18), label: const Text('Fuel difference statement')),
+                  if (onCorrect != null) TextButton.icon(onPressed: onCorrect, icon: const Icon(Icons.gavel_rounded, size: 18), label: const Text('Official correction')),
                 ]),
               ),
           ],
@@ -635,13 +663,76 @@ class _BatchScreenState extends State<BatchScreen> {
     }
   }
 
+  /// Shows the manual changes this batch pays; true when the person confirms they checked them.
+  Future<bool> _reviewChanges(List<Json> items) async {
+    var checked = false;
+    final r = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => AlertDialog(
+          title: Text('Check ${items.length} manual change(s) before finalizing'),
+          content: SizedBox(
+            width: 560,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const Text('This batch pays changes made by hand. Once finalized, they can only be changed by an official Correction.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 13)),
+              const SizedBox(height: 10),
+              Flexible(
+                child: ListView(shrinkWrap: true, children: [
+                  for (final i in items)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.edit_note_rounded, color: AppColors.edited),
+                      title: Text('${_reviewKinds[i.str('kind')] ?? i.str('kind')}: ${i.str('ref')}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                      subtitle: Text([
+                        if (i.strOrNull('by') != null) 'by ${i.str('by')}',
+                        if (i.strOrNull('reason') != null) i.str('reason'),
+                      ].join('  ·  ')),
+                    ),
+                ]),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: checked,
+                onChanged: (v) => set(() => checked = v ?? false),
+                title: const Text('I checked these changes'),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: checked ? () => Navigator.pop(ctx, true) : null, child: const Text('Finalize')),
+          ],
+        ),
+      ),
+    );
+    return r ?? false;
+  }
+
   Future<void> _finalize() async {
-    final ok = await confirmDialog(context, 'Finalize batch #${widget.id}?',
-        'The rows, fuel and adjustments of this batch are locked. Later changes need a correction and a new version.', confirm: 'Finalize');
-    if (!ok) return;
+    var ack = false;
+    try {
+      final summary = await Api.I.getObj('/equipment/payroll/batches/${widget.id}/review-summary');
+      if (!mounted) return;
+      final items = summary.list('items');
+      if (items.isNotEmpty) {
+        ack = await _reviewChanges(items);
+        if (!ack) return;
+      }
+    } catch (e) {
+      if (mounted) showError(context, e);
+      return;
+    }
+    if (!ack) {
+      if (!mounted) return;
+      final ok = await confirmDialog(context, 'Finalize batch #${widget.id}?',
+          'The rows, fuel and adjustments of this batch are locked. Later changes need an official Correction.', confirm: 'Finalize');
+      if (!ok) return;
+    }
     setState(() => _busy = true);
     try {
-      await Api.I.patch('/equipment/payroll/batches/${widget.id}/finalize');
+      await Api.I.patch('/equipment/payroll/batches/${widget.id}/finalize', {'acknowledge_changes': ack});
       if (mounted) showSnack(context, 'Batch finalized. Invoice numbers issued.');
       await _load();
     } on ApiException catch (e) {
@@ -670,6 +761,13 @@ class _BatchScreenState extends State<BatchScreen> {
             actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
           ),
         );
+      } else if (e.code == 'CHANGES_NOT_ACKNOWLEDGED') {
+        // something changed meanwhile: show the current list again
+        final items = e.details == null ? <Json>[] : e.details!.list('items');
+        setState(() => _busy = false);
+        if (items.isNotEmpty && await _reviewChanges(items)) {
+          await _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/finalize', {'acknowledge_changes': true}), 'Batch finalized. Invoice numbers issued.');
+        }
       } else {
         showError(context, e);
       }
@@ -679,8 +777,83 @@ class _BatchScreenState extends State<BatchScreen> {
   }
 
   Future<void> _markPaid() async {
-    final ok = await confirmDialog(context, 'Mark as paid?', 'Record that the vendors were paid for batch #${widget.id}.', confirm: 'Mark paid');
-    if (ok) _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/mark-paid', {'paid_at': Fmt.nowWall()}), 'Marked as paid.');
+    final hours = _b?.obj('paid_undo').intOrNull('window_hours');
+    final ref = await promptText(context, 'Mark batch #${widget.id} as paid?',
+        label: 'Payment reference (bank transfer / cheque no.), optional',
+        required: false,
+        maxLines: 1,
+        confirm: 'Mark paid',
+        help: 'Without a payment reference, a mistake can be undone${hours == null ? ' for a limited time' : ' within $hours hours'}. '
+            'Once a reference is recorded, the payment is final: differences go through an official Correction.');
+    if (ref == null) return;
+    _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/mark-paid', {'paid_at': Fmt.nowWall(), if (ref.isNotEmpty) 'payment_reference': ref}),
+        'Marked as paid.');
+  }
+
+  Future<void> _undoPaid() async {
+    final reason = await promptText(context, 'Undo "Mark paid" of batch #${widget.id}?',
+        label: 'Why? (kept in the history)',
+        minLength: 5,
+        confirm: 'Undo',
+        help: 'Only for a batch marked paid by mistake. It goes back to Finalized and waiting for payment; nothing else changes.');
+    if (reason == null) return;
+    _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/undo-paid', {'reason': reason}), 'Payment mark removed.');
+  }
+
+  Future<void> _paymentReference() async {
+    final cur = _b?.strOrNull('payment_reference');
+    final ref = await promptText(context, cur == null ? 'Record the payment reference' : 'Change the payment reference',
+        label: 'Bank transfer / cheque no.', initial: cur, maxLines: 1, help: 'Once recorded, "Mark paid" can no longer be undone.');
+    if (ref == null || ref == cur) return;
+    String? reason;
+    if (cur != null) {
+      if (!mounted) return;
+      reason = await promptText(context, 'Why does the reference change?', label: 'Reason', minLength: 5);
+      if (reason == null) return;
+    }
+    _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/payment-reference', {'payment_reference': ref, if (reason != null) 'reason': reason}),
+        'Payment reference saved.');
+  }
+
+  /// Official correction of money on an item of a FINALIZED batch that is not an attendance row:
+  /// a fuel issue (litres / price), the rate card price, or another amount. Another Admin or Accountant approves it.
+  Future<void> _financialCorrection(Json item) async {
+    final fuel = item.list('lines').where((l) => l.str('line_type') == 'Fuel' && l.intOrNull('source_id') != null).toList();
+    final what = await pickFromList(context, 'What was wrong on ${item.str('equipment_code')}?', [
+      for (final l in fuel)
+        PickOption(l, 'Fuel issue #${l.str('source_id')}', '${Fmt.num2(l.dblOrNull('quantity'))} L x ${(l.dblOrNull('unit_price') ?? 0).toStringAsFixed(3)}'),
+      if (item.intOrNull('rate_card_id') != null) PickOption('rate_card', 'Price of the rate card', 'agreed price / discount not applied'),
+      PickOption('other', 'Another amount', 'anything else that was paid wrong'),
+    ]);
+    if (what == null || !mounted) return;
+    final body = <String, dynamic>{'eq_item_id': item.intv('eq_item_id')};
+    if (what.value is Map) {
+      final l = asJson(what.value);
+      final liters = await promptText(context, 'Correct litres', label: 'Litres (from the receipt)', initial: l.dblOrNull('quantity')?.toString() ?? '', maxLines: 1);
+      if (liters == null || !mounted) return;
+      final n = num.tryParse(liters.replaceAll(',', '.'));
+      if (n == null || n <= 0) {
+        showError(context, ApiException(null, 'VALIDATION', 'Type the number of litres.'));
+        return;
+      }
+      body.addAll({'target_type': 'fuel_issue', 'target_id': l.intv('source_id'), 'fuel_changes': {'liters': n}});
+    } else {
+      final amount = await promptText(context, 'Amount of the correction',
+          label: 'Amount (+ the vendor gets more, - the vendor gets less)', maxLines: 1, help: 'Settled by a debit (+) or credit (-) note in the first open period.');
+      if (amount == null || !mounted) return;
+      final n = num.tryParse(amount.replaceAll(',', '.'));
+      if (n == null || n == 0) {
+        showError(context, ApiException(null, 'VALIDATION', 'Type a non-zero amount.'));
+        return;
+      }
+      body.addAll({'target_type': what.value == 'rate_card' ? 'rate_card' : 'other', if (what.value == 'rate_card') 'target_id': item.intv('rate_card_id'), 'amount': n});
+    }
+    if (!mounted) return;
+    final reason = await promptText(context, 'Reason of the correction', label: 'Reason (printed on the debit / credit note)', minLength: 5);
+    if (reason == null) return;
+    body['reason'] = reason;
+    _act(() => Api.I.post('/equipment/admin/corrections/financial', body),
+        'Correction requested. Another Admin or Accountant approves it in Fuel & adjustments -> Corrections.');
   }
 
   /// An Accountant asking to undo a FINALIZED batch: the Admin must approve (when only the Admin closes payroll).
@@ -747,7 +920,9 @@ class _BatchScreenState extends State<BatchScreen> {
       if (!mounted) return;
       setState(() => _busy = false);
       if (e.code == 'BLOCKERS_PRESENT') {
-        final ok = await confirmDialog(context, 'Open problems', '${e.message}\n\nCreate the new version anyway (rows with problems are left out)?', confirm: 'Continue', danger: true);
+        final ok = await confirmDialog(context, 'Open problems',
+            '${e.message}\n\nCreate the new version anyway (rows with problems are left out)? Your reason "$reason" is kept as the reason for accepting them.',
+            confirm: 'Continue', danger: true);
         if (ok) await _act(() => run(true), 'New version created.', reloadOther: true);
       } else {
         showError(context, e);
@@ -845,8 +1020,11 @@ class _BatchScreenState extends State<BatchScreen> {
     final cur = b.str('currency');
     final status = b.str('status');
     final fin = b.flag('is_finalized');
-    final canFinalize = status == 'Generated' && !fin && Auth.I.isAdmin; // the Admin finalizes and marks paid
-    final canPay = status == 'Generated' && fin && Auth.I.isAdmin;
+    // who closes payroll follows the setting payroll_finalize_admin_only (Admin only, or Admin and Accountant)
+    final mayClose = Auth.I.isAdmin || (Auth.I.isAccountant && !b.flag('finalize_admin_only'));
+    final canFinalize = status == 'Generated' && !fin && mayClose;
+    final canPay = status == 'Generated' && fin && mayClose;
+    final undo = b.obj('paid_undo');
     final hasFuelDiff = b.list('items').any((i) => (i.dblOrNull('fuel_difference') ?? 0) != 0);
     final vendorInvoices = b.list('invoices').where((i) => i.str('kind') == 'Vendor' && !i.flag('cancelled')).toList();
     final cancelledInvoices = b.list('invoices').where((i) => i.flag('cancelled')).toList();
@@ -934,15 +1112,39 @@ class _BatchScreenState extends State<BatchScreen> {
               ]),
               const SizedBox(height: 12),
             ],
-            if (status == 'Generated' && !fin && !Auth.I.isAdmin)
+            if (status == 'Generated' && !fin && !mayClose)
               const Padding(
                 padding: EdgeInsets.only(bottom: 10),
                 child: Text('Upload the signed monthly sheets in Paper sheets; the Admin then finalizes this batch.', style: TextStyle(color: AppColors.muted)),
+              ),
+            if (b.strOrNull('accept_blockers_reason') != null)
+              NoticeBox(
+                color: AppColors.standby,
+                icon: Icons.rule_rounded,
+                title: 'Generated with open problems',
+                text: b.str('accept_blockers_reason'),
+              ),
+            if (status == 'Paid')
+              NoticeBox(
+                color: AppColors.working,
+                icon: Icons.paid_rounded,
+                title: b.strOrNull('payment_reference') == null ? 'Paid (no payment reference yet)' : 'Paid · reference ${b.str('payment_reference')}',
+                text: undo.flag('possible')
+                    ? 'Marked paid by mistake? It can be undone for ${Fmt.duration(undo.intv('minutes_left'))} more (until a payment reference is recorded).'
+                    : 'Final. Any difference is settled with an official Correction (open the machine below).',
               ),
             Wrap(spacing: 8, runSpacing: 8, children: [
               if (hasFuelDiff) OutlinedButton.icon(onPressed: () => _pdf('fueldiff', suffix: 'fuel-difference'), icon: const Icon(Icons.local_gas_station_rounded), label: const Text('Fuel difference statements')),
               if (canFinalize) FilledButton.icon(onPressed: _busy || b.flag('stale') ? null : _finalize, icon: const Icon(Icons.lock_rounded), label: const Text('Finalize')),
               if (canPay) FilledButton.icon(onPressed: _busy ? null : _markPaid, icon: const Icon(Icons.paid_rounded), label: const Text('Mark paid'), style: FilledButton.styleFrom(backgroundColor: AppColors.working)),
+              if (status == 'Paid' && mayClose && undo.flag('possible'))
+                OutlinedButton.icon(onPressed: _busy ? null : _undoPaid, icon: const Icon(Icons.undo_rounded), label: const Text('Undo mark paid')),
+              if (status == 'Paid' && mayClose)
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _paymentReference,
+                  icon: const Icon(Icons.confirmation_number_rounded),
+                  label: Text(b.strOrNull('payment_reference') == null ? 'Add payment reference' : 'Payment reference'),
+                ),
               if (canSupersede) OutlinedButton.icon(onPressed: _busy || b.obj('pending_request').isNotEmpty ? null : _supersede, icon: const Icon(Icons.difference_rounded), label: Text(_needsApproval ? 'Ask for new version' : 'New version')),
               if (canVoid) OutlinedButton.icon(onPressed: _busy || b.obj('pending_request').isNotEmpty ? null : _void, icon: const Icon(Icons.block_rounded, color: AppColors.breakdown), label: Text(_needsApproval ? 'Ask to void' : 'Void', style: const TextStyle(color: AppColors.breakdown))),
             ]),
@@ -959,6 +1161,7 @@ class _BatchScreenState extends State<BatchScreen> {
               onRows: () => _rows(it),
               onPdf: () => _pdf('machine', equipmentId: it.intv('equipment_id'), suffix: it.str('equipment_code')),
               onFuelPdf: (it.dblOrNull('fuel_difference') ?? 0) == 0 ? null : () => _pdf('fueldiff', equipmentId: it.intv('equipment_id'), suffix: 'fuel-${it.str('equipment_code')}'),
+              onCorrect: fin && (status == 'Generated' || status == 'Paid') && (Auth.I.isAdmin || Auth.I.isAccountant) ? () => _financialCorrection(it) : null,
             ),
         ]),
       ),

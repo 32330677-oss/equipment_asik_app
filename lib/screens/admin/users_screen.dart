@@ -69,12 +69,15 @@ class _UsersScreenState extends State<UsersScreen> {
 
   Future<void> _toggle(Json u) async {
     final active = u.str('status') == 'Active';
-    final ok = await confirmDialog(context, active ? 'Deactivate user' : 'Activate user',
-        active ? '${u.str('full_name')} will not be able to sign in.' : '${u.str('full_name')} will be able to sign in again.',
-        confirm: active ? 'Deactivate' : 'Activate', danger: active);
-    if (!ok) return;
+    final reason = await promptText(context, active ? 'Deactivate ${u.str('full_name')}?' : 'Activate ${u.str('full_name')}?',
+        label: active ? 'Why? (kept in the audit log)' : 'Note (optional)',
+        required: active,
+        minLength: active ? 5 : 0,
+        confirm: active ? 'Deactivate' : 'Activate',
+        help: active ? '${u.str('full_name')} will not be able to sign in.' : '${u.str('full_name')} will be able to sign in again.');
+    if (reason == null) return;
     try {
-      await Api.I.patch('/users/${u.intv('user_id')}/status', {'status': active ? 'Inactive' : 'Active'});
+      await Api.I.patch('/users/${u.intv('user_id')}/status', {'status': active ? 'Inactive' : 'Active', if (reason.isNotEmpty) 'reason': reason});
       _load();
     } catch (e) {
       if (mounted) showError(context, e);
@@ -179,7 +182,12 @@ class _UserDialogState extends State<_UserDialog> {
   late final _email = TextEditingController(text: widget.user?.str('email') ?? '');
   late final _phone = TextEditingController(text: widget.user?.str('phone_number') ?? '');
   late String _role = widget.user?.str('role') ?? 'Supervisor';
+  late final String? _oldRole = widget.user?.str('role');
+  final _reason = TextEditingController();
   bool _busy = false;
+
+  /// a role change gives or removes permissions: a reason is required (audit log)
+  bool get _roleChanged => _oldRole != null && _role != _oldRole;
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
@@ -190,6 +198,7 @@ class _UserDialogState extends State<_UserDialog> {
         'email': _email.text.trim().isEmpty ? null : _email.text.trim(),
         'phone_number': _phone.text.trim().isEmpty ? null : _phone.text.trim(),
         'role': _role,
+        if (_roleChanged) 'reason': _reason.text.trim(),
       };
       final Json res = widget.user == null
           ? asJson(await Api.I.post('/users', {...body, 'username': _username.text.trim()}))
@@ -230,6 +239,15 @@ class _UserDialogState extends State<_UserDialog> {
               ],
               onChanged: (v) => setState(() => _role = v ?? _role),
             ),
+            if (_roleChanged) ...[
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _reason,
+                maxLines: 2,
+                decoration: InputDecoration(labelText: 'Why change the role from $_oldRole to $_role? *'),
+                validator: (v) => (v ?? '').trim().length < 5 ? 'Write at least 5 characters' : null,
+              ),
+            ],
             const SizedBox(height: 12),
             TextFormField(controller: _email, decoration: const InputDecoration(labelText: 'Email (optional)')),
             const SizedBox(height: 12),

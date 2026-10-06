@@ -78,6 +78,7 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
   }
 
   Future<void> _price(Json r) async {
+    final priced = r.strOrNull('price_per_liter') != null;
     final v = await promptText(context, 'Price per litre - ${r.str('equipment_code')} ${Fmt.date(r.str('issue_date'))}',
         label: 'Price per litre (${r.str('liters')} L)', initial: r.strOrNull('price_per_liter'), maxLines: 1, confirm: 'Save price');
     if (v == null) return;
@@ -86,11 +87,42 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
       if (mounted) showSnack(context, 'Enter a valid price.', error: true);
       return;
     }
+    String? reason;
+    if (priced) {
+      if (!mounted) return;
+      reason = await promptText(context, 'Why does the price change?', label: 'Reason (kept in the history)', minLength: 5);
+      if (reason == null) return;
+    }
+    await _save(r, {'price_per_liter': n, if (reason != null) 'reason': reason});
+  }
+
+  /// Litres written wrong on the issue (before its period is closed): reason required, kept in the history.
+  Future<void> _liters(Json r) async {
+    final v = await promptText(context, 'Litres - ${r.str('equipment_code')} ${Fmt.date(r.str('issue_date'))}',
+        label: 'Litres (from the receipt)', initial: r.str('liters'), maxLines: 1, confirm: 'Next');
+    if (v == null) return;
+    final n = num.tryParse(v.replaceAll(',', '.'));
+    if (n == null || n <= 0) {
+      if (mounted) showSnack(context, 'Enter the number of litres.', error: true);
+      return;
+    }
+    if (!mounted) return;
+    final reason = await promptText(context, 'Why do the litres change?', label: 'Reason (kept in the history)', minLength: 5);
+    if (reason == null) return;
+    await _save(r, {'liters': n, 'reason': reason});
+  }
+
+  Future<void> _save(Json r, Map<String, dynamic> body) async {
     try {
-      await Api.I.patch('/equipment/fuel-issues/${r.intv('fuel_issue_id')}', {'price_per_liter': n});
+      await Api.I.patch('/equipment/fuel-issues/${r.intv('fuel_issue_id')}', body);
       _load();
-    } catch (e) {
-      if (mounted) showError(context, e);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'PAYROLL_PERIOD_FINALIZED' || e.code == 'PAYROLL_LOCKED') {
+        showSnack(context, '${e.message} Open the paid batch, then the machine, then "Official correction".', error: true);
+      } else {
+        showError(context, e);
+      }
     }
   }
 
@@ -114,7 +146,8 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
   }
 
   Future<void> _cancel(Json r) async {
-    final reason = await promptText(context, 'Cancel fuel issue', label: 'Reason', confirm: 'Cancel issue');
+    final reason = await promptText(context, 'Cancel fuel issue', label: 'Reason', confirm: 'Cancel issue', minLength: 5,
+        help: 'The issue is kept (marked cancelled). A draft payroll batch that uses it becomes out of date.');
     if (reason == null) return;
     try {
       await Api.I.patch('/equipment/fuel-issues/${r.intv('fuel_issue_id')}/cancel', {'reason': reason});
@@ -176,7 +209,7 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
     final liters = active.fold<double>(0, (s, r) => s + r.dbl('liters'));
     final value = active.fold<double>(0, (s, r) => s + r.dbl('liters') * r.dbl('price_per_liter'));
     return PageBody(onRefresh: _load, children: [
-      PageHeader(title: 'Fuel issues', subtitle: 'Fuel we gave to the machines. Supervisors record litres; prices are added here.', actions: [
+      PageHeader(title: 'Fuel issues', subtitle: 'Fuel issued to the machines, recorded here from the receipts (it is not recorded at check-out).', actions: [
         FilterChip(
           label: const Text('Unpriced only'),
           selected: _unpricedOnly,
@@ -265,7 +298,10 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
                   DataCell(Text(r.str('issued_by'), style: const TextStyle(color: AppColors.muted, fontSize: 12.5))),
                   DataCell(r.flag('is_cancelled')
                       ? Tooltip(message: r.str('cancel_reason'), child: const Icon(Icons.info_outline_rounded, size: 18, color: AppColors.muted))
-                      : IconButton(tooltip: 'Cancel', icon: const Icon(Icons.block_rounded, size: 18, color: AppColors.breakdown), onPressed: () => _cancel(r))),
+                      : Row(mainAxisSize: MainAxisSize.min, children: [
+                          IconButton(tooltip: 'Correct the litres', icon: const Icon(Icons.edit_rounded, size: 18), onPressed: () => _liters(r)),
+                          IconButton(tooltip: 'Cancel', icon: const Icon(Icons.block_rounded, size: 18, color: AppColors.breakdown), onPressed: () => _cancel(r)),
+                        ])),
                 ],
               ),
           ],
@@ -309,7 +345,8 @@ class _AdjustmentsTabState extends State<_AdjustmentsTab> with AutomaticKeepAliv
   }
 
   Future<void> _cancel(Json r) async {
-    final reason = await promptText(context, 'Cancel adjustment', label: 'Reason', confirm: 'Cancel adjustment');
+    final reason = await promptText(context, 'Cancel adjustment', label: 'Reason', confirm: 'Cancel adjustment', minLength: 5,
+        help: r.intOrNull('in_batch_id') == null ? null : 'Draft payroll batch #${r.str('in_batch_id')} uses it: that batch becomes out of date.');
     if (reason == null) return;
     try {
       await Api.I.patch('/equipment/adjustments/${r.intv('adjustment_id')}/cancel', {'reason': reason});
@@ -373,11 +410,21 @@ class _AdjustmentsTabState extends State<_AdjustmentsTab> with AutomaticKeepAliv
                 DataCell(Text(Fmt.money(r.dbl('amount'), r.str('currency')),
                     style: TextStyle(fontWeight: FontWeight.w800, color: r.dbl('amount') < 0 ? AppColors.breakdown : AppColors.working))),
                 DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 260), child: Text(r.str('reason'), maxLines: 2, overflow: TextOverflow.ellipsis))),
-                DataCell(Pill(r.str('status'), color: r.str('status') == 'Active' ? AppColors.working : AppColors.neutral)),
+                DataCell(Wrap(spacing: 4, runSpacing: 4, children: [
+                  Pill(r.str('status'), color: r.str('status') == 'Active' ? AppColors.working : AppColors.neutral),
+                  if (r.intOrNull('in_batch_id') != null) Pill('Batch #${r.str('in_batch_id')}', color: AppColors.info),
+                ])),
                 DataCell(Text(r.str('created_by'), style: const TextStyle(color: AppColors.muted, fontSize: 12.5))),
-                DataCell(r.str('status') == 'Active'
-                    ? IconButton(tooltip: 'Cancel', icon: const Icon(Icons.block_rounded, size: 18, color: AppColors.breakdown), onPressed: () => _cancel(r))
-                    : const SizedBox()),
+                DataCell(r.intOrNull('correction_id') != null || r.strOrNull('correction_note_no') != null
+                    // the settlement of an approved correction belongs to it: never cancelled by hand
+                    ? Tooltip(
+                        message: 'Settles correction #${r.str('correction_id')}${r.strOrNull('correction_note_no') == null ? '' : ' (${r.str('correction_note_no')})'}. '
+                            'It cannot be cancelled; a mistake is fixed by a new correction.',
+                        child: const Icon(Icons.lock_rounded, size: 18, color: AppColors.navy),
+                      )
+                    : r.str('status') == 'Active'
+                        ? IconButton(tooltip: 'Cancel', icon: const Icon(Icons.block_rounded, size: 18, color: AppColors.breakdown), onPressed: () => _cancel(r))
+                        : const SizedBox()),
               ]),
           ],
         ),
@@ -437,8 +484,9 @@ Future<Json?> showAdjustmentDialog(BuildContext context, {PickOption? machine, P
 }
 
 // ================================================================= corrections
-/// Official corrections of rows already paid by a finalized payroll.
-/// Admin requests → Accountant reviews (may set the amount) → Admin approves (debit / credit note) or returns it.
+/// Official corrections of money already committed by a finalized (or paid) payroll: attendance rows, fuel issues,
+/// rate card prices and other amounts. Admin or Accountant requests; ANOTHER Admin or Accountant approves (a debit /
+/// credit note settles it in the first open period). Whoever changes the request (amount, fields) cannot approve that version.
 class _CorrectionsTab extends StatefulWidget {
   const _CorrectionsTab();
   @override
@@ -447,7 +495,7 @@ class _CorrectionsTab extends StatefulWidget {
 
 class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliveClientMixin {
   final _s = Loadable<List<Json>>();
-  String? _status = Auth.I.isAccountant ? 'Requested' : 'Reviewed';
+  String? _status = 'Requested,Reviewed';
 
   @override
   bool get wantKeepAlive => true;
@@ -489,7 +537,7 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
     final why = TextEditingController(text: c.strOrNull('override_reason') ?? '');
     await showFormDialog<bool>(context,
         title: 'Review correction #${_id(c)}',
-        saveLabel: 'Send to Admin',
+        saveLabel: 'Save review',
         body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(auto ? 'Computed difference: ${Fmt.money2(c.strOrNull('delta_amount'), c.strOrNull('currency'))}' : 'This row was not paid by a finalized batch: enter the amount to settle (0 if none).',
                   style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -521,7 +569,7 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
           return true;
         }).then((ok) {
       if (ok == true) {
-        if (mounted) showSnack(context, 'Reviewed — sent to the Admin for approval.');
+        if (mounted) showSnack(context, 'Saved. Another Admin or Accountant approves it.');
         _load();
       }
     });
@@ -531,15 +579,16 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
     final amt = c.strOrNull('amount_override') ?? c.strOrNull('delta_amount');
     final n = double.tryParse(amt ?? '') ?? 0;
     final what = n == 0 ? 'no money difference (no note is issued)' : '${n > 0 ? 'a debit note' : 'a credit note'} of ${Fmt.money(n.abs(), c.strOrNull('currency'))}';
-    final note = await promptText(context, 'Approve correction #${_id(c)}', label: 'Note (optional) — this applies the change and issues $what', required: false, confirm: 'Approve');
+    final note = await promptText(context, 'Approve correction #${_id(c)}',
+        label: 'Note (optional)', required: false, confirm: 'Approve', help: 'This applies the change and issues $what in the first open period. The paid batch itself never changes.');
     if (note == null) return;
     _act(c, 'approve', {'note': note}, 'Correction approved.');
   }
 
   Future<void> _return(Json c) async {
-    final note = await promptText(context, 'Return correction #${_id(c)} to the accountant', label: 'What should be checked again', confirm: 'Return');
+    final note = await promptText(context, 'Return correction #${_id(c)}', label: 'What should be checked again', confirm: 'Return');
     if (note == null) return;
-    _act(c, 'return', {'note': note}, 'Returned to the accountant.');
+    _act(c, 'return', {'note': note}, 'Returned to the requester.');
   }
 
   Future<void> _cancel(Json c) async {
@@ -595,9 +644,11 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
     return PageBody(onRefresh: _load, maxWidth: 1100, children: [
       PageHeader(
           title: 'Corrections',
-          subtitle: 'Changes to rows already paid by a finalized payroll. The Admin requests, the accountant reviews, the Admin approves; approval issues a debit / credit note.',
+          subtitle: 'Changes to money already in a finalized or paid payroll. One person requests, another Admin or Accountant approves; '
+              'approval issues a debit / credit note in the first open period.',
           actions: [
-            Dropdown<String?>(label: 'Status', value: _status, width: 150, items: const [
+            Dropdown<String?>(label: 'Status', value: _status, width: 170, items: const [
+              DropdownMenuItem(value: 'Requested,Reviewed', child: Text('Waiting')),
               DropdownMenuItem(value: null, child: Text('All')),
               DropdownMenuItem(value: 'Requested', child: Text('Requested')),
               DropdownMenuItem(value: 'Reviewed', child: Text('Reviewed')),
@@ -619,7 +670,8 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
   Widget _card(Json c, {required bool admin, required bool reviewer}) {
     final st = c.str('request_status');
     final cur = c.strOrNull('currency');
-    final legacyOpen = st == 'Approved' && c.str('adjustment_status') == 'Open';
+    final open = st == 'Requested' || st == 'Reviewed';
+    final target = c.str('target_type', 'attendance');
     const small = TextStyle(color: AppColors.muted, fontSize: 13);
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -628,7 +680,10 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Expanded(
-              child: Text('#${_id(c)} · ${c.str('equipment_code')} · ${c.str('site_code')} · ${Fmt.dayLabel(c.str('record_date'))}',
+              child: Text(
+                  target == 'attendance'
+                      ? '#${_id(c)} · ${c.str('equipment_code')} · ${c.str('site_code')} · ${Fmt.dayLabel(c.str('record_date'))}'
+                      : '#${_id(c)} · ${c.str('equipment_code')} · ${const {'fuel_issue': 'Fuel issue', 'rate_card': 'Rate card', 'fuel_price': 'Fuel price', 'fuel_terms': 'Fuel terms', 'adjustment': 'Adjustment', 'deployment': 'Deployment'}[target] ?? 'Other amount'}${c.strOrNull('target_id') == null ? '' : ' #${c.str('target_id')}'}',
                   style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
             ),
             if (c.strOrNull('locked_batch_id') != null) ...[Pill('Batch #${c.str('locked_batch_id')}', color: AppColors.info), const SizedBox(width: 6)],
@@ -655,41 +710,27 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
                 style: const TextStyle(color: AppColors.working, fontSize: 13)),
           ],
           const SizedBox(height: 10),
+          if (open && !c.flag('can_approve'))
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('You wrote the last version of this request: another Admin or Accountant must approve it.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
+            ),
           Wrap(spacing: 8, runSpacing: 8, children: [
-            if (st == 'Requested' && reviewer) FilledButton.icon(onPressed: () => _review(c), icon: const Icon(Icons.fact_check_rounded), label: const Text('Review')),
-            if (st == 'Reviewed' && admin) ...[
-              FilledButton.icon(onPressed: () => _approve(c), icon: const Icon(Icons.verified_rounded), label: const Text('Approve')),
-              OutlinedButton.icon(onPressed: () => _return(c), icon: const Icon(Icons.undo_rounded), label: const Text('Return to accountant')),
-            ],
-            if ((st == 'Requested' || st == 'Reviewed') && admin) TextButton(onPressed: () => _cancel(c), child: const Text('Cancel')),
-            if (legacyOpen && admin) ...[
-              FilledButton.icon(onPressed: () => _resolve(c, withAdjustment: true), icon: const Icon(Icons.add_card_rounded), label: const Text('Create adjustment & resolve')),
-              OutlinedButton(onPressed: () => _resolve(c, withAdjustment: false), child: const Text('Resolve without money')),
-            ],
+            if (open && c.flag('can_approve')) FilledButton.icon(onPressed: () => _approve(c), icon: const Icon(Icons.verified_rounded), label: const Text('Approve')),
+            if (open && reviewer)
+              OutlinedButton.icon(
+                onPressed: () => _review(c),
+                icon: const Icon(Icons.fact_check_rounded),
+                label: Text(c.intv('corrected_by_user_id') == Auth.I.userId ? 'Change my request' : 'Review / set amount'),
+              ),
+            if (open && c.flag('can_approve')) OutlinedButton.icon(onPressed: () => _return(c), icon: const Icon(Icons.undo_rounded), label: const Text('Return')),
+            if (open && reviewer) TextButton(onPressed: () => _cancel(c), child: const Text('Cancel')),
             TextButton.icon(onPressed: () => _history(c), icon: const Icon(Icons.history_rounded, size: 18), label: const Text('History')),
           ]),
         ]),
       ),
     );
-  }
-
-  /// Older corrections (before the approval flow) are still settled by hand.
-  Future<void> _resolve(Json c, {required bool withAdjustment}) async {
-    int? adjustmentId;
-    if (withAdjustment) {
-      final a = await showAdjustmentDialog(context,
-          machine: PickOption(c.intv('equipment_id'), c.str('equipment_code')),
-          site: c.intOrNull('site_id') == null ? null : PickOption(c.intv('site_id'), c.str('site_code')),
-          date: c.str('record_date'),
-          reason: 'Correction #${c.str('correction_id')} of ${c.str('record_date')}: ${c.str('reason')}');
-      if (a == null) return;
-      adjustmentId = a.intv('adjustment_id');
-    }
-    if (!mounted) return;
-    final note = await promptText(context, 'Resolve correction #${c.str('correction_id')}',
-        label: 'Resolution note', initial: withAdjustment ? 'Settled with adjustment #$adjustmentId' : 'No money difference', confirm: 'Resolve');
-    if (note == null) return;
-    _act(c, 'resolve', {'resolution_note': note, 'adjustment_id': adjustmentId}, 'Correction resolved.');
   }
 }
 
@@ -785,10 +826,14 @@ class _FuelPricesTabState extends State<_FuelPricesTab> with AutomaticKeepAliveC
   }
 
   Future<void> _delete(Json p) async {
-    final ok = await confirmDialog(context, 'Delete this price?', '${p.str('currency')} ${p.str('price_per_liter')} from ${Fmt.date(p.str('effective_from'))}.', confirm: 'Delete', danger: true);
-    if (!ok) return;
+    final reason = await promptText(context, 'Delete this price?',
+        label: 'Reason (required when a draft payroll uses this price)',
+        required: false,
+        confirm: 'Delete',
+        help: '${p.str('currency')} ${p.str('price_per_liter')} from ${Fmt.date(p.str('effective_from'))}. A price used by a finalized payroll cannot be deleted.');
+    if (reason == null) return;
     try {
-      await Api.I.delete('/equipment/fuel-prices/${p.intv('fuel_price_id')}');
+      await Api.I.delete('/equipment/fuel-prices/${p.intv('fuel_price_id')}', {if (reason.isNotEmpty) 'reason': reason});
       _load();
     } catch (e) {
       if (mounted) showError(context, e);

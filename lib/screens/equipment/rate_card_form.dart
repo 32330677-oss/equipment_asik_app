@@ -220,7 +220,20 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       }
       final body = {..._card(), 'vendor_contract_id': _contract!.value, 'effective_from': _from, if (_to != null) 'effective_to': _to};
       if (_editing) {
-        await Api.I.put('/equipment/rate-cards/${widget.card!.intv('rate_card_id')}', body);
+        try {
+          await Api.I.put('/equipment/rate-cards/${widget.card!.intv('rate_card_id')}', body);
+        } on ApiException catch (e) {
+          // a draft payroll batch uses this card: the change needs a reason (the batch must then be regenerated)
+          final fields = e.details?.obj('fields') ?? <String, dynamic>{};
+          if (e.code != 'VALIDATION_ERROR' || !fields.containsKey('reason') || !mounted) rethrow;
+          final reason = await promptText(context, 'Why does this rate card change?',
+              label: 'Reason (kept in the history)', minLength: 5, help: '${fields['reason']}');
+          if (reason == null) {
+            if (mounted) setState(() => _saving = false);
+            return;
+          }
+          await Api.I.put('/equipment/rate-cards/${widget.card!.intv('rate_card_id')}', {...body, 'reason': reason});
+        }
       } else {
         await Api.I.post('/equipment/machines/${widget.machine.intv('equipment_id')}/rate-cards', body);
       }

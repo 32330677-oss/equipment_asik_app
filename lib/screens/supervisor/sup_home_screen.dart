@@ -287,7 +287,12 @@ class _RejectedRowsScreenState extends State<RejectedRowsScreen> {
                               isScrollControlled: true,
                               showDragHandle: true,
                               useSafeArea: true,
-                              builder: (_) => RowDetailSheet(att: r, vendorId: r.intOrNull('vendor_id')),
+                              builder: (_) => RowDetailSheet(
+                                att: r,
+                                vendorId: r.intOrNull('vendor_id'),
+                                canEdit: !r.containsKey('can_edit') || r.flag('can_edit'),
+                                denial: r.strOrNull('edit_denial'),
+                              ),
                             );
                             _load();
                           },
@@ -300,6 +305,11 @@ class _RejectedRowsScreenState extends State<RejectedRowsScreen> {
                               ]),
                               const SizedBox(height: 6),
                               Text('Office: ${r.str('admin_rejection_notes', '-')}', style: const TextStyle(color: AppColors.breakdown, fontWeight: FontWeight.w600)),
+                              if (r.containsKey('can_edit') && !r.flag('can_edit'))
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 4),
+                                  child: Pill('Read only for you: open it to see what you can do', color: AppColors.navy, icon: Icons.visibility_rounded),
+                                ),
                               const SizedBox(height: 6),
                               Text('${r.str('day_status')}  ·  ${r.strOrNull('check_in_time') == null ? '-' : '${Fmt.time(r.str('check_in_time'))} → ${Fmt.timeOn(r.strOrNull('check_out_time'), r.str('record_date'))}'}',
                                   style: const TextStyle(color: AppColors.muted, fontSize: 13)),

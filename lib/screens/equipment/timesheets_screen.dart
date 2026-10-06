@@ -339,13 +339,15 @@ class _ReconcileScreenState extends State<ReconcileScreen> {
                             Wrap(spacing: 6, runSpacing: 4, children: [
                               PaperPill(r.str('paper_status')),
                               WorkflowPill(r.str('status')),
+                              if (r.flag('cancelled') && r.strOrNull('cancel_reason') != null)
+                                Text('Cancelled: ${r.str('cancel_reason')} (write "cancelled" on this paper row)', style: const TextStyle(color: AppColors.muted, fontSize: 12)),
                               if (r.strOrNull('operator_name') != null) Text(r.str('operator_name'), style: const TextStyle(color: AppColors.muted, fontSize: 12)),
                               if (r.objOrNull('current_check') != null && r.obj('current_check').strOrNull('note') != null)
                                 Text('"${r.obj('current_check').str('note')}"', style: const TextStyle(color: AppColors.breakdown, fontSize: 12)),
                             ]),
                           ]),
                         ),
-                        if (canCheck && s.str('status') != 'Reconciled')
+                        if (canCheck && s.str('status') != 'Reconciled' && !r.flag('cancelled'))
                           Row(mainAxisSize: MainAxisSize.min, children: [
                             Tooltip(
                               message: 'Matches the paper, both signatures present',

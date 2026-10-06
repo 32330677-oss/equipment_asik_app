@@ -341,6 +341,40 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
     }
   }
 
+  /// The first day was entered wrong (machine arrived earlier / later): reason required, refused inside a closed period
+  /// and when it would leave recorded days outside the deployment.
+  Future<void> _changeStart(Json d) async {
+    var date = d.str('assigned_date');
+    final reason = TextEditingController();
+    final ok = await showFormDialog<bool>(
+      context,
+      title: 'Correct the first day at ${d.str('site_code')}',
+      saveLabel: 'Save',
+      width: 440,
+      onSave: () async {
+        await Api.I.patch('/equipment/deployments/${d.intv('eq_assignment_id')}/start', {'assigned_date': date, 'reason': reason.text.trim()});
+        return true;
+      },
+      body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('Use this when the first day was entered wrong. Days already paid by a finalized payroll cannot move: use an official Correction.',
+            style: TextStyle(color: AppColors.muted, fontSize: 13)),
+        const SizedBox(height: 12),
+        DateField(label: 'Real first day on the site', value: date, onChanged: (x) => set(() => date = x ?? date)),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: reason,
+          maxLines: 2,
+          decoration: const InputDecoration(labelText: 'Reason *', hintText: 'e.g. gate log shows the 17th'),
+          validator: (v) => (v ?? '').trim().length < 5 ? 'Write at least 5 characters' : null,
+        ),
+      ]),
+    );
+    if (ok == true && mounted) {
+      showSnack(context, 'First day corrected.');
+      _load();
+    }
+  }
+
   Future<void> _transfer(Json d) async {
     PickOption? site;
     var shift = 'Day';
@@ -549,8 +583,10 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                         onSelected: (v) {
                           if (v == 'end') _end(d);
                           if (v == 'transfer') _transfer(d);
+                          if (v == 'start') _changeStart(d);
                         },
                         itemBuilder: (_) => [
+                          const PopupMenuItem(value: 'start', child: ListTile(leading: Icon(Icons.edit_calendar_rounded), title: Text('Correct the first day'))),
                           if (current(d)) const PopupMenuItem(value: 'transfer', child: ListTile(leading: Icon(Icons.swap_horiz_rounded), title: Text('Transfer to another site'))),
                           const PopupMenuItem(value: 'end', child: ListTile(leading: Icon(Icons.logout_rounded), title: Text('End deployment'))),
                         ],

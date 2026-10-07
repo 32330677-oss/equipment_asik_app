@@ -18,7 +18,7 @@ const _blockerHelp = {
   'OPEN_SESSION': 'The supervisor must check the machine out.',
   'UNACK_ANOMALY': 'Acknowledge the anomaly in Attendance review.',
   'PAPER_NOT_MATCHED': 'Upload the signed sheet and reconcile it in Paper sheets.',
-  'NO_RATE_CARD': 'Add a rate card for these dates on the machine page.',
+  'NO_RATE_CARD': 'Add a rate card (or a DNR price for per-unit work) for these dates on the machine page.',
   'FUEL_UNPRICED': 'Enter the price per litre in Fuel & adjustments.',
   'STANDBY_HOURS_NOT_SET': 'Monthly machine standby: open the row in Attendance review and set the standby hours to pay.',
   'IN_OTHER_BATCH': 'Already paid in another batch; they are skipped.',
@@ -44,10 +44,25 @@ const _reviewKinds = {
   'correction_settlement': 'Correction settlement',
   'fuel_changed': 'Fuel issue changed',
   'rate_card_changed': 'Rate card changed',
+  'delivery_note_changed': 'Delivery note changed',
+  'previous_balance': 'Unpaid balance of an earlier batch added',
   'accepted_blockers': 'Generated with open problems',
 };
 
-Color _batchColor(String status, bool finalized) {
+const _payMethods = {'BankTransfer': 'Bank transfer', 'Cheque': 'Cheque', 'Cash': 'Cash', 'Other': 'Other'};
+
+/// Money state of one vendor (or a whole batch) once finalized.
+Pill payStatePill(String? s) => switch (s) {
+      'Paid' => const Pill('Paid', color: AppColors.working, icon: Icons.paid_rounded),
+      'PartiallyPaid' => const Pill('Partly paid', color: AppColors.gold, icon: Icons.timelapse_rounded),
+      'CarriedForward' => const Pill('Carried forward', color: AppColors.edited, icon: Icons.redo_rounded),
+      'NothingDue' => const Pill('Nothing due', color: AppColors.neutral),
+      _ => const Pill('Not paid', color: AppColors.info, icon: Icons.schedule_rounded),
+    };
+
+Color _batchColor(String status, bool finalized, [String? payment]) {
+  if (status == 'Generated' && finalized && payment == 'PartiallyPaid') return AppColors.gold;
+  if (status == 'Generated' && finalized && payment == 'CarriedForward') return AppColors.edited;
   switch (status) {
     case 'Paid':
       return AppColors.working;
@@ -60,7 +75,13 @@ Color _batchColor(String status, bool finalized) {
   }
 }
 
-String _batchLabel(String status, bool finalized) => status == 'Generated' ? (finalized ? 'Finalized' : 'Draft') : status;
+String _batchLabel(String status, bool finalized, [String? payment]) {
+  if (status != 'Generated') return status;
+  if (!finalized) return 'Draft';
+  if (payment == 'PartiallyPaid') return 'Partly paid';
+  if (payment == 'CarriedForward') return 'Carried forward';
+  return 'Finalized';
+}
 
 /// Payroll batches list + entry point to the "new payroll" wizard.
 class PayrollScreen extends StatefulWidget {
@@ -104,10 +125,11 @@ class _PayrollScreenState extends State<PayrollScreen> {
   Widget build(BuildContext context) {
     final rows = _s.data ?? <Json>[];
     final drafts = rows.where((r) => r.str('status') == 'Generated' && !r.flag('is_finalized')).length;
-    final toPay = rows.where((r) => r.str('status') == 'Generated' && r.flag('is_finalized')).toList();
+    // what is still owed: the balance (invoice + carried in - payments - carried out), not the invoice total
+    final toPay = rows.where((r) => r.str('status') == 'Generated' && r.flag('is_finalized') && r.dbl('balance') > 0).toList();
     final unpaid = <String, double>{};
     for (final r in toPay) {
-      unpaid[r.str('currency')] = (unpaid[r.str('currency')] ?? 0) + r.dbl('total_net');
+      unpaid[r.str('currency')] = (unpaid[r.str('currency')] ?? 0) + r.dbl('balance');
     }
     return PageBody(
       onRefresh: _load,
@@ -125,7 +147,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
         Wrap(spacing: 12, runSpacing: 12, children: [
           KpiTile(label: 'Batches', value: '${rows.length}', icon: Icons.folder_copy_rounded),
           KpiTile(label: 'Drafts to finalize', value: '$drafts', color: AppColors.standby, icon: Icons.edit_note_rounded),
-          KpiTile(label: 'Finalized, not paid', value: '${toPay.length}', color: AppColors.info, icon: Icons.schedule_rounded),
+          KpiTile(label: 'Finalized, still owed', value: '${toPay.length}', color: AppColors.info, icon: Icons.schedule_rounded),
           for (final e in unpaid.entries)
             KpiTile(label: 'To pay (${e.key})', value: Fmt.money(e.value, e.key), color: AppColors.navy, icon: Icons.account_balance_wallet_rounded, width: 220),
         ]),
@@ -141,7 +163,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
               DataColumn(label: Text('#')), DataColumn(label: Text('Period')), DataColumn(label: Text('Scope')),
               DataColumn(label: Text('Status')), DataColumn(label: Text('Ver.'), numeric: true), DataColumn(label: Text('Machines'), numeric: true),
               DataColumn(label: Text('Gross'), numeric: true), DataColumn(label: Text('Deductions'), numeric: true), DataColumn(label: Text('Net'), numeric: true),
-              DataColumn(label: Text('Generated')),
+              DataColumn(label: Text('Still owed'), numeric: true), DataColumn(label: Text('Generated')),
             ],
             rows: [
               for (final r in rows)
@@ -152,7 +174,8 @@ class _PayrollScreenState extends State<PayrollScreen> {
                     DataCell(Text('${Fmt.date(r.str('start_date'))} - ${Fmt.date(r.str('end_date'))}')),
                     DataCell(Text(_scopeText(r))),
                     DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
-                      Pill(_batchLabel(r.str('status'), r.flag('is_finalized')), color: _batchColor(r.str('status'), r.flag('is_finalized'))),
+                      Pill(_batchLabel(r.str('status'), r.flag('is_finalized'), r.strOrNull('payment_status')),
+                          color: _batchColor(r.str('status'), r.flag('is_finalized'), r.strOrNull('payment_status'))),
                       if (r.intv('pending_requests') > 0) ...[const SizedBox(width: 6), const Pill('Request', color: AppColors.standby, icon: Icons.hourglass_top_rounded)],
                     ])),
                     DataCell(Text('v${r.str('version_number')}')),
@@ -160,6 +183,9 @@ class _PayrollScreenState extends State<PayrollScreen> {
                     DataCell(Text(Fmt.money2(r.strOrNull('total_gross'), r.str('currency')))),
                     DataCell(Text(Fmt.money2(r.strOrNull('total_deductions'), r.str('currency')))),
                     DataCell(Text(Fmt.money2(r.strOrNull('total_net'), r.str('currency')), style: const TextStyle(fontWeight: FontWeight.w800))),
+                    DataCell(Text(
+                        r.str('status') == 'Generated' && r.flag('is_finalized') ? Fmt.money2(r.strOrNull('balance'), r.str('currency')) : '-',
+                        style: TextStyle(fontWeight: FontWeight.w700, color: r.dbl('balance') > 0 ? AppColors.breakdown : AppColors.muted))),
                     DataCell(Text('${Fmt.date(r.str('generated_at'))}  ${r.str('generated_by')}', style: const TextStyle(color: AppColors.muted, fontSize: 12.5))),
                   ],
                 ),
@@ -195,6 +221,8 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
   String? _currency;
 
   bool _busy = false;
+  /// "Add previous balances": unpaid balances of earlier finalized batches of the same vendors move into this batch.
+  bool _carry = false;
   List<Json>? _blockers;
   Json? _preview;
   Object? _previewError;
@@ -255,12 +283,17 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     }
     setState(() => _busy = true);
     try {
-      final body = {..._scope, 'accept_blockers': accept, if (accept && _acceptReason != null) 'accept_reason': _acceptReason, if (currency != null) 'currency': currency};
+      final body = {
+        ..._scope, 'accept_blockers': accept, if (accept && _acceptReason != null) 'accept_reason': _acceptReason, if (currency != null) 'currency': currency,
+        if (_carry && (_preview?.list('carry_forward').isNotEmpty ?? false)) 'carry_forward': true,
+      };
       final r = await Api.I.request('POST', '/equipment/payroll/generate', body: body);
       final b = asJson(r['data']);
       final warnings = asJsonList(r['warnings']);
       if (!mounted) return;
-      showSnack(context, 'Batch #${b.str('eq_batch_id')} generated${warnings.isEmpty ? '' : ' with ${warnings.length} warning(s)'}.');
+      final carried = warnings.where((w) => w.str('code') == 'PREVIOUS_BALANCES_ADDED').toList();
+      showSnack(context, 'Batch #${b.str('eq_batch_id')} generated${carried.isEmpty ? '' : '. ${carried.first.str('message')}'}'
+          '${warnings.length - carried.length <= 0 ? '' : ' (${warnings.length - carried.length} warning(s))'}.');
       Navigator.pop(context, b.intv('eq_batch_id'));
       return;
     } on ApiException catch (e) {
@@ -379,6 +412,10 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
                     ]),
                   ),
               ],
+              if (p.list('carry_forward').isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _CarryCard(list: p.list('carry_forward'), value: _carry, onChanged: (v) => setState(() => _carry = v)),
+              ],
               const SizedBox(height: 12),
               for (final it in items) _ItemTile(item: it, preview: true),
             ]),
@@ -395,6 +432,47 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
       ('This month', Fmt.dateOf(DateTime(n.year, n.month, 1)), Fmt.dateOf(DateTime(n.year, n.month + 1, 0))),
       ('1st half', Fmt.dateOf(DateTime(n.year, n.month, 1)), Fmt.dateOf(DateTime(n.year, n.month, 15))),
     ];
+  }
+}
+
+/// Unpaid balances of earlier finalized batches of the same vendors, offered on New payroll.
+class _CarryCard extends StatelessWidget {
+  const _CarryCard({required this.list, required this.value, required this.onChanged});
+  final List<Json> list;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final totals = <String, double>{};
+    for (final c in list) {
+      totals[c.str('currency')] = (totals[c.str('currency')] ?? 0) + c.dbl('amount');
+    }
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.edited.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.edited.withValues(alpha: 0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          value: value,
+          onChanged: (v) => onChanged(v ?? false),
+          title: Text('Add previous balances (${totals.entries.map((e) => Fmt.money(e.value, e.key)).join(' + ')})', style: const TextStyle(fontWeight: FontWeight.w800)),
+          subtitle: const Text('These vendors are still owed money on earlier finalized invoices. Ticked: the balances move into this batch, '
+              'the old invoices are closed as "carried forward" and are paid here. Not ticked: they stay on their own batch.'),
+        ),
+        for (final c in list)
+          Padding(
+            padding: const EdgeInsets.only(left: 8, top: 2),
+            child: Text('${c.str('vendor_name')}  ·  batch #${c.str('from_batch_id')} (${Fmt.date(c.str('start_date'))} - ${Fmt.date(c.str('end_date'))})'
+                '${c.strOrNull('invoice_no') == null ? '' : '  ·  ${c.str('invoice_no')}'}  ·  ${Fmt.money2(c.strOrNull('amount'), c.str('currency'))}',
+                style: const TextStyle(fontSize: 13)),
+          ),
+      ]),
+    );
   }
 }
 
@@ -495,8 +573,13 @@ class _ItemTile extends StatelessWidget {
           subtitle: Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Wrap(spacing: 14, runSpacing: 4, children: [
-              kv('Days', '${item.str('worked_days')}/${item.str('days_recorded')}'),
-              kv('Work h', item.str('work_hours')),
+              if (item.str('billing_mode') == 'DNR') ...[
+                kv('Delivery notes', '${item.list('lines').where((l) => l.str('line_type') == 'DeliveryNote').length}'),
+                kv('Days', item.str('worked_days')),
+              ] else ...[
+                kv('Days', '${item.str('worked_days')}/${item.str('days_recorded')}'),
+                kv('Work h', item.str('work_hours')),
+              ],
               if (item.dbl('overtime_hours') > 0) kv('OT h', item.str('overtime_hours')),
               if (item.dbl('standby_hours') > 0) kv('Standby h', item.str('standby_hours')),
               if (item.dbl('breakdown_hours') > 0) kv('Breakdown h', item.str('breakdown_hours')),
@@ -590,6 +673,7 @@ String _lineName(String t) {
     'FuelPriceDifference': 'Fuel price difference',
     'HoursShortfall': 'Missing hours (below the monthly hours due)',
     'SecondShift': 'Second shift the same day',
+    'DeliveryNote': 'Delivery note (DNR)',
   };
   return names[t] ?? t.replaceAllMapped(RegExp(r'(?<=[a-z])([A-Z])'), (m) => ' ${m[1]!.toLowerCase()}');
 }
@@ -778,16 +862,178 @@ class _BatchScreenState extends State<BatchScreen> {
 
   Future<void> _markPaid() async {
     final hours = _b?.obj('paid_undo').intOrNull('window_hours');
+    final owed = _b?.obj('settlement').obj('totals').strOrNull('balance');
     final ref = await promptText(context, 'Mark batch #${widget.id} as paid?',
         label: 'Payment reference (bank transfer / cheque no.), optional',
         required: false,
         maxLines: 1,
         confirm: 'Mark paid',
-        help: 'Without a payment reference, a mistake can be undone${hours == null ? ' for a limited time' : ' within $hours hours'}. '
+        help: 'Pays the REMAINING balance of every vendor${owed == null ? '' : ' (${Fmt.money2(owed, _b!.str('currency'))})'}: '
+            'one payment voucher per vendor; partial payments already made stay as they are. '
+            'Without a payment reference, a mistake can be undone${hours == null ? ' for a limited time' : ' within $hours hours'}. '
             'Once a reference is recorded, the payment is final: differences go through an official Correction.');
     if (ref == null) return;
     _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/mark-paid', {'paid_at': Fmt.nowWall(), if (ref.isNotEmpty) 'payment_reference': ref}),
         'Marked as paid.');
+  }
+
+  // ------------------------------------------------------------- payments (partial payments, vouchers, statement)
+  Future<void> _recordPayment(Json vendor) async {
+    final cur = _b!.str('currency');
+    final amount = TextEditingController(text: vendor.str('balance'));
+    final reference = TextEditingController();
+    final note = TextEditingController();
+    var paidOn = Fmt.today();
+    var method = 'BankTransfer';
+    final r = await showFormDialog<Json>(
+      context,
+      title: 'Payment to ${vendor.str('vendor_name')}',
+      width: 500,
+      saveLabel: 'Record payment',
+      onSave: () async {
+        final n = numOrNull(amount);
+        if (n == null || n <= 0) throw ApiException(null, 'VALIDATION', 'Type the amount paid.');
+        if (n > vendor.dbl('balance') + 0.0001) throw ApiException(null, 'OVERPAYMENT', 'The amount is more than the balance (${Fmt.money2(vendor.strOrNull('balance'), cur)}).');
+        return asJson(await Api.I.request('POST', '/equipment/payroll/batches/${widget.id}/payments', body: {
+          'vendor_id': vendor.intv('vendor_id'), 'amount': n, 'paid_on': paidOn, 'method': method,
+          if (textOrNull(reference) != null) 'reference': textOrNull(reference), if (textOrNull(note) != null) 'note': textOrNull(note),
+        }));
+      },
+      body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Invoice ${vendor.str('invoice_no', '-')}  ·  still owed ${Fmt.money2(vendor.strOrNull('balance'), cur)}',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.navy)),
+        const SizedBox(height: 4),
+        const Text('The invoice is not changed. A payment voucher is issued, and the statement of account shows what is left. '
+            'When nothing is left on the batch, it becomes Paid by itself.', style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
+        const SizedBox(height: 14),
+        FormGrid(children: [
+          textField(amount, 'Amount paid ($cur)', number: true, required: true),
+          DateField(label: 'Payment date', value: paidOn, last: Fmt.today(), onChanged: (v) => set(() => paidOn = v ?? paidOn)),
+          Dropdown<String>(label: 'Method', value: method, width: null, items: [
+            for (final e in _payMethods.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
+          ], onChanged: (v) => set(() => method = v ?? method)),
+          textField(reference, 'Reference (transfer / cheque no.)'),
+        ]),
+        const SizedBox(height: 12),
+        textField(note, 'Note', maxLines: 2),
+      ]),
+    );
+    if (r == null || !mounted) return;
+    final p = r.obj('payment');
+    await _load();
+    if (!mounted) return;
+    final open = await confirmDialog(context, 'Payment recorded: ${p.str('voucher_no')}',
+        '${Fmt.money2(p.strOrNull('amount'), cur)} paid. Still owed to ${vendor.str('vendor_name')}: ${Fmt.money2(p.strOrNull('balance_after'), cur)}.\n\nOpen the payment voucher to print it?',
+        confirm: 'Open voucher');
+    if (open && mounted) _voucherPdf(p);
+  }
+
+  void _voucherPdf(Json p) => PdfViewScreen.open(context,
+      title: 'Payment voucher ${p.str('voucher_no')}',
+      fileName: '${p.str('voucher_no')}.pdf',
+      load: () => Api.I.getBytes('/equipment/payroll/payments/${p.intv('payment_id')}/voucher.pdf'));
+
+  void _statementPdf(Json vendor) => PdfViewScreen.open(context,
+      title: 'Statement of account - ${vendor.str('vendor_name')}',
+      fileName: 'statement-${vendor.str('invoice_no', 'batch-${widget.id}')}.pdf',
+      load: () => Api.I.getBytes('/equipment/payroll/batches/${widget.id}/statement.pdf', query: {'vendor_id': vendor.intv('vendor_id')}));
+
+  Future<void> _reversePayment(Json p) async {
+    final reason = await promptText(context, 'Reverse payment ${p.str('voucher_no')}?',
+        label: 'Why? (printed on the voucher, kept in the history)', minLength: 5, confirm: 'Reverse', help: 'The voucher is kept and marked REVERSED; the amount is owed again.');
+    if (reason == null) return;
+    _act(() => Api.I.patch('/equipment/payroll/payments/${p.intv('payment_id')}/reverse', {'reason': reason}), 'Payment reversed.');
+  }
+
+  Widget _paymentsCard(Json b) {
+    final st = b.obj('settlement');
+    final cur = b.str('currency');
+    final vendors = st.list('vendors');
+    final canPay = b.str('status') == 'Generated' && (Auth.I.isAdmin || Auth.I.isAccountant);
+    return SectionCard(
+      title: 'Payments and balance',
+      trailing: payStatePill(st.strOrNull('payment_status')),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (st.flag('legacy_paid'))
+          const NoticeBox(color: AppColors.working, icon: Icons.paid_rounded, text: 'Marked paid before payments were recorded one by one: fully paid.'),
+        Wrap(spacing: 12, runSpacing: 12, children: [
+          KpiTile(label: 'Total due', value: Fmt.money2(st.obj('totals').strOrNull('total_due'), cur), width: 200),
+          KpiTile(label: 'Paid', value: Fmt.money2(st.obj('totals').strOrNull('paid'), cur), color: AppColors.working, width: 200, icon: Icons.paid_rounded),
+          if (st.obj('totals').dbl('carried_out') > 0)
+            KpiTile(label: 'Carried to a later batch', value: Fmt.money2(st.obj('totals').strOrNull('carried_out'), cur), color: AppColors.edited, width: 220, icon: Icons.redo_rounded),
+          KpiTile(label: 'Still owed', value: Fmt.money2(st.obj('totals').strOrNull('balance'), cur), color: st.obj('totals').dbl('balance') > 0 ? AppColors.breakdown : AppColors.working,
+              width: 200, icon: Icons.account_balance_wallet_rounded),
+        ]),
+        const SizedBox(height: 12),
+        for (final v in vendors)
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.line), color: Colors.white),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(v.str('vendor_name'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                    Text('Invoice ${v.str('invoice_no', '-')}  ·  ${Fmt.money2(v.strOrNull('invoice_amount'), cur)}'
+                        '${v.dbl('carried_in') > 0 ? '  +  previous balances ${Fmt.money2(v.strOrNull('carried_in'), cur)}' : ''}',
+                        style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+                  ]),
+                ),
+                payStatePill(v.strOrNull('payment_status')),
+              ]),
+              const SizedBox(height: 8),
+              Wrap(spacing: 16, runSpacing: 4, children: [
+                kv('Due', Fmt.money2(v.strOrNull('total_due'), cur)),
+                kv('Paid', Fmt.money2(v.strOrNull('paid'), cur)),
+                if (v.dbl('carried_out') > 0) kv('Carried forward', Fmt.money2(v.strOrNull('carried_out'), cur)),
+                kv('Still owed', Fmt.money2(v.strOrNull('balance'), cur)),
+              ]),
+              for (final c in v.list('carried_in_detail'))
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('From batch #${c.str('from_batch_id')} (${Fmt.date(c.str('start_date'))} - ${Fmt.date(c.str('end_date'))})'
+                      '${c.strOrNull('invoice_no') == null ? '' : ' ${c.str('invoice_no')}'}: ${Fmt.money2(c.strOrNull('amount'), cur)}',
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.edited)),
+                ),
+              for (final c in v.list('carried_out_detail'))
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('Carried to batch #${c.str('to_batch_id')} (${c.str('to_state')}): ${Fmt.money2(c.strOrNull('amount'), cur)} - pay it there.',
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.edited)),
+                ),
+              if (v.list('payments').isNotEmpty) ...[
+                const Divider(height: 18),
+                for (final p in v.list('payments'))
+                  Row(children: [
+                    Icon(p.str('status') == 'Reversed' ? Icons.undo_rounded : Icons.receipt_rounded, size: 18,
+                        color: p.str('status') == 'Reversed' ? AppColors.neutral : AppColors.working),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${p.str('voucher_no')}  ·  ${Fmt.date(p.str('paid_on'))}  ·  ${_payMethods[p.str('method')] ?? p.str('method')}'
+                        '${p.strOrNull('reference') == null ? '' : ' ${p.str('reference')}'}'
+                        '${p.str('source') == 'MarkPaid' ? '  ·  Mark paid' : ''}${p.str('status') == 'Reversed' ? '  ·  REVERSED: ${p.str('reverse_reason')}' : ''}',
+                        style: TextStyle(fontSize: 13, color: p.str('status') == 'Reversed' ? AppColors.muted : AppColors.ink,
+                            decoration: p.str('status') == 'Reversed' ? TextDecoration.lineThrough : null),
+                      ),
+                    ),
+                    Text(Fmt.money2(p.strOrNull('amount'), cur), style: const TextStyle(fontWeight: FontWeight.w700)),
+                    IconButton(tooltip: 'Payment voucher', onPressed: () => _voucherPdf(p), icon: const Icon(Icons.picture_as_pdf_rounded, size: 18)),
+                    if (p.str('status') == 'Active' && (Auth.I.isAdmin || Auth.I.isAccountant))
+                      IconButton(tooltip: 'Reverse', onPressed: _busy ? null : () => _reversePayment(p), icon: const Icon(Icons.undo_rounded, size: 18, color: AppColors.breakdown)),
+                  ]),
+              ],
+              const SizedBox(height: 6),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                if (canPay && v.dbl('balance') > 0)
+                  FilledButton.icon(onPressed: _busy ? null : () => _recordPayment(v), icon: const Icon(Icons.payments_rounded), label: const Text('Record payment')),
+                OutlinedButton.icon(onPressed: () => _statementPdf(v), icon: const Icon(Icons.description_rounded), label: const Text('Statement of account')),
+              ]),
+            ]),
+          ),
+      ]),
+    );
   }
 
   Future<void> _undoPaid() async {
@@ -1023,7 +1269,7 @@ class _BatchScreenState extends State<BatchScreen> {
     // who closes payroll follows the setting payroll_finalize_admin_only (Admin only, or Admin and Accountant)
     final mayClose = Auth.I.isAdmin || (Auth.I.isAccountant && !b.flag('finalize_admin_only'));
     final canFinalize = status == 'Generated' && !fin && mayClose;
-    final canPay = status == 'Generated' && fin && mayClose;
+    final canPay = status == 'Generated' && fin && mayClose && b.obj('settlement').obj('totals').dbl('balance') > 0;
     final undo = b.obj('paid_undo');
     final hasFuelDiff = b.list('items').any((i) => (i.dblOrNull('fuel_difference') ?? 0) != 0);
     final vendorInvoices = b.list('invoices').where((i) => i.str('kind') == 'Vendor' && !i.flag('cancelled')).toList();
@@ -1045,7 +1291,7 @@ class _BatchScreenState extends State<BatchScreen> {
                   Text('${_scopeText(b)}  ·  version ${b.str('version_number')}  ·  $cur', style: const TextStyle(color: AppColors.muted)),
                 ]),
               ),
-              Pill(_batchLabel(status, fin), color: _batchColor(status, fin)),
+              Pill(_batchLabel(status, fin, b.obj('settlement').strOrNull('payment_status')), color: _batchColor(status, fin, b.obj('settlement').strOrNull('payment_status'))),
             ]),
             if (b.flag('stale'))
               Container(
@@ -1151,6 +1397,10 @@ class _BatchScreenState extends State<BatchScreen> {
           ]),
         ),
       ),
+      if (fin && (status == 'Generated' || status == 'Paid')) ...[
+        const SizedBox(height: 14),
+        _paymentsCard(b),
+      ],
       const SizedBox(height: 14),
       SectionCard(
         title: 'Machines (${b.list('items').length})',
@@ -1158,7 +1408,7 @@ class _BatchScreenState extends State<BatchScreen> {
           for (final it in b.list('items'))
             _ItemTile(
               item: {...it, 'currency': cur},
-              onRows: () => _rows(it),
+              onRows: it.str('billing_mode') == 'DNR' ? null : () => _rows(it),
               onPdf: () => _pdf('machine', equipmentId: it.intv('equipment_id'), suffix: it.str('equipment_code')),
               onFuelPdf: (it.dblOrNull('fuel_difference') ?? 0) == 0 ? null : () => _pdf('fueldiff', equipmentId: it.intv('equipment_id'), suffix: 'fuel-${it.str('equipment_code')}'),
               onCorrect: fin && (status == 'Generated' || status == 'Paid') && (Auth.I.isAdmin || Auth.I.isAccountant) ? () => _financialCorrection(it) : null,

@@ -10,6 +10,7 @@ import '../../core/theme.dart';
 import '../../widgets/lookups.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
+import 'delivery_notes_screen.dart';
 import 'rate_card_form.dart';
 
 Color machineStatusColor(String s) => s == 'Active' ? AppColors.working : s == 'Released' ? AppColors.info : AppColors.neutral;
@@ -71,7 +72,8 @@ class _MachinesScreenState extends State<MachinesScreen> {
   Widget build(BuildContext context) {
     final rows = _s.data ?? <Json>[];
     final deployed = rows.where((r) => r.strOrNull('site_code') != null).length;
-    final noRate = rows.where((r) => r.strOrNull('rate_card_id') == null && r.str('status') == 'Active').length;
+    // a machine paid only per delivery note (DNR) has a price even without a time rate card
+    final noRate = rows.where((r) => r.strOrNull('rate_card_id') == null && r.intv('dnr_rates') == 0 && r.str('status') == 'Active').length;
     return PageBody(
       onRefresh: _load,
       children: [
@@ -138,8 +140,10 @@ class _MachinesScreenState extends State<MachinesScreen> {
                       ? const Text('-', style: TextStyle(color: AppColors.muted))
                       : Text(r.str('deployments_today', r.str('site_code')), style: const TextStyle(fontWeight: FontWeight.w600))),
                   DataCell(r.strOrNull('rate_card_id') == null
-                      ? Pill('No price', color: r.str('status') == 'Active' ? AppColors.breakdown : AppColors.neutral, icon: Icons.warning_amber_rounded)
-                      : Text(rateText(r))),
+                      ? (r.intv('dnr_rates') > 0
+                          ? const Pill('DNR (per unit)', color: AppColors.info, icon: Icons.local_shipping_rounded)
+                          : Pill('No price', color: r.str('status') == 'Active' ? AppColors.breakdown : AppColors.neutral, icon: Icons.warning_amber_rounded))
+                      : Text(r.intv('dnr_rates') > 0 ? '${rateText(r)}  + DNR' : rateText(r))),
                 ]),
             ],
           ),
@@ -224,6 +228,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
   Object? _error;
   Uint8List? _photo;
   List<Json> _cards = [];
+  List<Json> _dnr = [];
 
   /// Admin and Accountant manage machines, deployments, rate cards and fuel terms.
   bool get _admin => Auth.I.isAdmin || Auth.I.isAccountant;
@@ -238,13 +243,14 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
     try {
       final m = await Api.I.getObj('/equipment/machines/${widget.id}');
       final cards = await Api.I.getList('/equipment/machines/${widget.id}/rate-cards');
+      final dnr = _admin ? await Api.I.getList('/equipment/machines/${widget.id}/dnr-rates') : <Json>[];
       Uint8List? photo;
       if (m.flag('has_photo')) {
         try {
           photo = await Api.I.getBytes('/equipment/machines/${widget.id}/photo');
         } catch (_) {}
       }
-      if (mounted) setState(() { _m = m; _cards = cards; _photo = photo; _error = null; });
+      if (mounted) setState(() { _m = m; _cards = cards; _dnr = dnr; _photo = photo; _error = null; });
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
@@ -456,6 +462,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                   _deployments(m),
                   const SizedBox(height: 14),
                   _rateCards(m),
+                  if (_admin) ...[const SizedBox(height: 14), _dnrPrices(m)],
                   const SizedBox(height: 14),
                   _fuelTerms(m),
                   const SizedBox(height: 14),
@@ -508,8 +515,13 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               _fact(Icons.location_on_rounded, 'Today', m.strOrNull('site_code') == null ? 'Not deployed' : '${m.str('site_code')} ${m.str('site_name')}',
                   m.strOrNull('site_code') == null ? AppColors.muted : AppColors.working),
-              _fact(Icons.sell_rounded, 'Price today', m.strOrNull('rate_card_id') == null ? 'No rate card' : rateText(m),
-                  m.strOrNull('rate_card_id') == null ? AppColors.breakdown : AppColors.ink),
+              _fact(
+                  Icons.sell_rounded,
+                  'Price today',
+                  m.strOrNull('rate_card_id') == null
+                      ? (m.intv('dnr_rates') > 0 ? 'Per delivery note (DNR)' : 'No rate card')
+                      : '${rateText(m)}${m.intv('dnr_rates') > 0 ? '  + DNR' : ''}',
+                  m.strOrNull('rate_card_id') == null && m.intv('dnr_rates') == 0 ? AppColors.breakdown : AppColors.ink),
               if (open != null)
                 _fact(Icons.play_circle_rounded, 'Open session', 'since ${Fmt.date(open.str('check_in_time'))} ${Fmt.time(open.str('check_in_time'))}', AppColors.standby),
             ]),
@@ -668,6 +680,93 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                         if (c.str('billing_mode') == 'Daily') kv('Partial day', c.str('daily_partial_rule')),
                         kv('Fuel', c.str('fuel_policy').replaceAll('CompanySupplies', 'We supply, ').replaceAll('VendorSupplies', 'Vendor')),
                       ]),
+                    ]),
+                  );
+                }),
+            ]),
+    );
+  }
+
+  // ------------------------------------------------------------- DNR prices (per unit, from delivery notes)
+  Future<void> _dnrAction(Json r, String action) async {
+    final id = r.intv('dnr_rate_id');
+    if (action == 'close') {
+      final d = await pickDate(context, initial: Fmt.today());
+      if (d == null) return;
+      _do(() => Api.I.patch('/equipment/dnr-rates/$id/close', {'effective_to': d}), 'DNR price ends on $d.');
+    } else if (action == 'price') {
+      final v = await promptText(context, 'Correct the unit price', label: 'Unit price', initial: r.str('unit_price'), maxLines: 1,
+          help: 'Only while no delivery note uses it. Otherwise close it and add a new price from the next day.');
+      final n = v == null ? null : num.tryParse(v.replaceAll(',', '.'));
+      if (n == null) return;
+      _do(() => Api.I.put('/equipment/dnr-rates/$id', {'unit_price': n}), 'Price corrected.');
+    } else if (action == 'cancel') {
+      final reason = await promptText(context, 'Cancel this DNR price?', label: 'Reason', minLength: 3, confirm: 'Cancel the price');
+      if (reason == null) return;
+      _do(() => Api.I.patch('/equipment/dnr-rates/$id/cancel', {'reason': reason}), 'DNR price cancelled.');
+    }
+  }
+
+  Widget _dnrPrices(Json m) {
+    final today = Fmt.today();
+    final active = _dnr.where((r) => r.str('status') == 'Active').toList();
+    return SectionCard(
+      title: 'DNR prices (per unit)',
+      trailing: Wrap(spacing: 8, children: [
+        OutlinedButton.icon(
+          onPressed: () => DeliveryNotesScreen.openForMachine(context, m).then((_) => _load()),
+          icon: const Icon(Icons.receipt_rounded),
+          label: const Text('Delivery notes'),
+        ),
+        FilledButton.tonalIcon(
+          onPressed: () async {
+            final ok = await RateCardFormScreen.open(context, machine: m, copyFrom: <String, dynamic>{'billing_mode': 'DNR', if (_cards.isNotEmpty) ...{
+              'vendor_contract_id': _cards.first.intv('vendor_contract_id'), 'contract_number': _cards.first.str('contract_number'), 'currency': _cards.first.str('currency')}});
+            if (ok == true) _load();
+          },
+          icon: const Icon(Icons.add_rounded),
+          label: const Text('New DNR price'),
+        ),
+      ]),
+      child: active.isEmpty
+          ? const EmptyView(
+              text: 'No DNR price. Use it when the vendor is paid per trip, per ton or per load from delivery notes. '
+                  'It can be added next to the time rate card: both are paid.',
+              icon: Icons.local_shipping_rounded)
+          : Column(children: [
+              for (final r in active)
+                Builder(builder: (context) {
+                  final current = r.str('effective_from').compareTo(today) <= 0 && (r.strOrNull('effective_to') == null || r.str('effective_to').compareTo(today) >= 0);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: current ? AppColors.info : AppColors.line),
+                      color: current ? AppColors.info.withValues(alpha: 0.04) : Colors.white,
+                    ),
+                    child: Row(children: [
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text('${r.str('item_name')}  ·  ${Fmt.money2(r.strOrNull('unit_price'), r.str('currency'))} / ${dnrUnits[r.str('unit')]?.split(' ').first ?? r.str('unit')}',
+                              style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.navy)),
+                          const SizedBox(height: 3),
+                          Text(
+                              '${Fmt.date(r.str('effective_from'))} → ${r.strOrNull('effective_to') == null ? 'open' : Fmt.date(r.str('effective_to'))}  ·  '
+                              '${r.str('applies_to') == 'machine' ? 'this machine only' : 'every machine of the vendor'}  ·  contract ${r.str('contract_number')}  ·  '
+                              '${r.intv('notes_count')} delivery note(s)',
+                              style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+                        ]),
+                      ),
+                      if (current) const Pill('Current', color: AppColors.info),
+                      PopupMenuButton<String>(
+                        onSelected: (v) => _dnrAction(r, v),
+                        itemBuilder: (_) => [
+                          if (r.intv('notes_count') == 0) const PopupMenuItem(value: 'price', child: ListTile(leading: Icon(Icons.edit_rounded), title: Text('Correct the price'))),
+                          const PopupMenuItem(value: 'close', child: ListTile(leading: Icon(Icons.event_busy_rounded), title: Text('Close on a date'))),
+                          if (r.intv('notes_count') == 0) const PopupMenuItem(value: 'cancel', child: ListTile(leading: Icon(Icons.block_rounded), title: Text('Cancel'))),
+                        ],
+                      ),
                     ]),
                   );
                 }),

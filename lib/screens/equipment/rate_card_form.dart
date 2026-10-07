@@ -38,6 +38,16 @@ class _SampleRow {
   static String _h(double v) => v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 }
 
+/// One DNR item: what is paid per unit (trip, ton, m3...), its unit and price.
+class _DnrItem {
+  final name = TextEditingController();
+  final price = TextEditingController();
+  String unit = 'trip';
+}
+
+/// DNR units (same list as the server).
+const dnrUnits = <String, String>{'trip': 'Trip (نقلة)', 't': 'Ton (طن)', 'm3': 'Cubic metre (م³)', 'km': 'Kilometre', 'pc': 'Piece (قطعة)', 'load': 'Load (حمولة)'};
+
 class _RateCardFormScreenState extends State<RateCardFormScreen> {
   final _form = GlobalKey<FormState>();
   PickOption? _contract;
@@ -62,6 +72,11 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
   final _notes = TextEditingController();
   bool _saving = false;
 
+  // DNR (per-unit prices of the vendor: per trip, per ton...)
+  bool get _dnr => _mode == 'DNR';
+  bool _dnrAllMachines = false;
+  final List<_DnrItem> _dnrItems = [_DnrItem()];
+
   // test panel
   final List<_SampleRow> _rows = [
     _SampleRow('Working', gross: 10, brk: 1),
@@ -85,8 +100,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
     _from = Fmt.today();
     final c = widget.card ?? widget.revise ?? widget.copyFrom;
     if (c != null) {
-      String t(String k) => c.strOrNull(k) == null ? '' : _trim(c.str(k));
-      _contract = PickOption(c.intv('vendor_contract_id'), '${c.str('contract_number')}  (${c.str('currency')})');
+      if (c.intOrNull('vendor_contract_id') != null) _contract = PickOption(c.intv('vendor_contract_id'), '${c.str('contract_number')}  (${c.str('currency')})');
       if (widget.card != null) {
         _from = c.str('effective_from');
         _to = c.strOrNull('effective_to');
@@ -97,6 +111,10 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
         _from = today.compareTo(start) > 0 ? today : Fmt.dateOf(Fmt.parse(start)!.add(const Duration(days: 1)));
       }
       _mode = c.str('billing_mode', 'Hourly');
+    }
+    // the values of a real card (a "New DNR price" start carries only the mode and the contract)
+    if (c != null && c.containsKey('standard_hours_per_day')) {
+      String t(String k) => c.strOrNull(k) == null ? '' : _trim(c.str(k));
       _hourly.text = t('hourly_rate');
       _daily.text = t('daily_rate');
       _monthly.text = t('monthly_rate');
@@ -203,7 +221,44 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
     return m;
   }
 
+  /// DNR prices are saved apart from the rate card: the machine keeps its time rate card (if any) and is ALSO paid per unit.
+  Future<void> _saveDnr() async {
+    if (!_form.currentState!.validate()) return;
+    if (_contract == null) {
+      showSnack(context, 'Choose the vendor contract.', error: true);
+      return;
+    }
+    final items = [
+      for (final it in _dnrItems)
+        if (it.name.text.trim().isNotEmpty) {'item_name': it.name.text.trim(), 'unit': it.unit, 'unit_price': numOrNull(it.price)},
+    ];
+    if (items.isEmpty) {
+      showSnack(context, 'Add at least one item (what is paid per unit).', error: true);
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await Api.I.post('/equipment/dnr-rates', {
+        'vendor_contract_id': _contract!.value,
+        if (!_dnrAllMachines) 'equipment_id': widget.machine.intv('equipment_id'),
+        'effective_from': _from,
+        if (_to != null) 'effective_to': _to,
+        if (textOrNull(_notes) != null) 'notes': textOrNull(_notes),
+        'items': items,
+      });
+      if (!mounted) return;
+      showSnack(context, '${items.length} DNR price(s) saved. Record the delivery notes in "Delivery notes (DNR)".');
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        showError(context, e);
+      }
+    }
+  }
+
   Future<void> _save() async {
+    if (_dnr) return _saveDnr();
     if (!_form.currentState!.validate()) return;
     if (_contract == null && !_revising) {
       showSnack(context, 'Choose the vendor contract.', error: true);
@@ -282,10 +337,10 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
     final m = widget.machine;
     final wide = MediaQuery.of(context).size.width >= 1100;
     final form = _formCard(m);
-    final test = _testCard();
+    final test = _dnr ? _dnrHelpCard() : _testCard();
     return Scaffold(
       appBar: AppBar(
-        title: Text('${_revising ? 'Change prices from a date' : _editing ? 'Correct rate card' : 'New rate card'} - ${m.str('equipment_code')}'),
+        title: Text('${_revising ? 'Change prices from a date' : _editing ? 'Correct rate card' : _dnr ? 'New DNR prices' : 'New rate card'} - ${m.str('equipment_code')}'),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -348,16 +403,19 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
           ], hint: _revising ? 'The current card stays as it is until the day before; invoices already issued keep their prices.' : null),
           _section('Billing', [
             SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'Hourly', icon: Icon(Icons.timer_rounded), label: Text('Hourly')),
-                ButtonSegment(value: 'Daily', icon: Icon(Icons.today_rounded), label: Text('Daily')),
-                ButtonSegment(value: 'Monthly', icon: Icon(Icons.calendar_month_rounded), label: Text('Monthly')),
+              segments: [
+                const ButtonSegment(value: 'Hourly', icon: Icon(Icons.timer_rounded), label: Text('Hourly')),
+                const ButtonSegment(value: 'Daily', icon: Icon(Icons.today_rounded), label: Text('Daily')),
+                const ButtonSegment(value: 'Monthly', icon: Icon(Icons.calendar_month_rounded), label: Text('Monthly')),
+                // 4th kind: per unit (trip, ton...) from delivery notes. Only for new prices (it is saved apart from the card).
+                if (!_editing && !_revising) const ButtonSegment(value: 'DNR', icon: Icon(Icons.local_shipping_rounded), label: Text('DNR (per unit)')),
               ],
               selected: {_mode},
               onSelectionChanged: (v) => setState(() => _mode = v.first),
             ),
             const SizedBox(height: 12),
-            FormGrid(children: [
+            if (_dnr) ..._dnrFields(),
+            if (!_dnr) FormGrid(children: [
               if (_mode == 'Hourly') textField(_hourly, 'Price per hour', number: true, required: true),
               if (_mode == 'Daily') textField(_daily, 'Price per day', number: true, required: true),
               if (_mode == 'Monthly') textField(_monthly, 'Price per month', number: true, required: true),
@@ -373,11 +431,14 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               if (_mode == 'Daily')
                 textField(_secondShift, 'Second shift same day', number: true, suffix: '%', hint: '0 to 100 of the daily price (0 = not paid)'),
             ]),
-          ], hint: _mode == 'Monthly'
-              ? 'Working days of a month = days of the month minus Fridays. Hourly price = monthly price / working days / hours per day. '
-                  'Hours due = working days x hours per day. All hours done = full month; more = overtime; fewer = missing hours deducted.'
-              : null),
-          if (_mode != 'Monthly') _section('Overtime', [
+          ], hint: _dnr
+              ? 'DNR = Delivery Note Registry: the vendor is paid per unit written on each delivery note (per trip, per ton...). '
+                  'It does not replace the time rate card: the same machine can be paid by the hour for one job and per trip for another.'
+              : _mode == 'Monthly'
+                  ? 'Working days of a month = days of the month minus Fridays. Hourly price = monthly price / working days / hours per day. '
+                      'Hours due = working days x hours per day. All hours done = full month; more = overtime; fewer = missing hours deducted.'
+                  : null),
+          if (_mode != 'Monthly' && !_dnr) _section('Overtime', [
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: _ot,
@@ -392,7 +453,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                 textField(_otMult, 'Multiplier', number: true, suffix: '×'),
               ]),
           ]),
-          _section('Standby, breakdown and breaks', [
+          if (!_dnr) _section('Standby, breakdown and breaks', [
             FormGrid(children: [
               // monthly machines: no standby %; the accountant gives the standby hours on each row (Attendance review)
               if (_mode != 'Monthly') textField(_standbyPct, 'Standby billable', number: true, required: true, suffix: '%'),
@@ -405,7 +466,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
           ], hint: _mode == 'Monthly'
               ? 'Standby of a monthly machine: no %. On each standby row the Admin or Accountant gives the hours to pay (at most the hours per day); payroll waits until they are set.'
               : null),
-          _section('Fuel', [
+          if (!_dnr) _section('Fuel', [
             Dropdown<String>(label: 'Fuel', value: _fuel, width: null, items: const [
               DropdownMenuItem(value: 'VendorSupplies', child: Text('Vendor supplies the fuel')),
               DropdownMenuItem(value: 'CompanySuppliesDeducted', child: Text('We supply, deducted from vendor')),
@@ -413,6 +474,92 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
             ], onChanged: (v) => setState(() => _fuel = v ?? _fuel)),
           ]),
           textField(_notes, 'Notes', maxLines: 2),
+        ]),
+      ),
+    );
+  }
+
+  /// DNR fields: for this machine or for every machine of the vendor, and the items (name, unit, price).
+  List<Widget> _dnrFields() => [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: _dnrAllMachines,
+          onChanged: (v) => setState(() => _dnrAllMachines = v),
+          title: Text(_dnrAllMachines ? 'For every machine of ${widget.machine.str('vendor_name')}' : 'For this machine only (${widget.machine.str('equipment_code')})'),
+          subtitle: const Text('A price for every machine of the vendor saves typing it again for each truck.'),
+        ),
+        const SizedBox(height: 8),
+        for (var i = 0; i < _dnrItems.length; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(flex: 5, child: textField(_dnrItems[i].name, 'What is paid', required: true, hint: 'e.g. Sand transport quarry > S08')),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 3,
+                child: Dropdown<String>(
+                  label: 'Per',
+                  value: _dnrItems[i].unit,
+                  width: null,
+                  items: [for (final e in dnrUnits.entries) DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis))],
+                  onChanged: (v) => setState(() => _dnrItems[i].unit = v ?? _dnrItems[i].unit),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(flex: 3, child: textField(_dnrItems[i].price, 'Unit price', number: true, required: true)),
+              IconButton(
+                tooltip: 'Remove',
+                onPressed: _dnrItems.length <= 1 ? null : () => setState(() => _dnrItems.removeAt(i)),
+                icon: const Icon(Icons.close_rounded, size: 18),
+              ),
+            ]),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _dnrItems.length >= 30 ? null : () => setState(() => _dnrItems.add(_DnrItem())),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Add item'),
+          ),
+        ),
+      ];
+
+  Widget _dnrHelpCard() {
+    final cur = _contract?.label.contains('(') == true ? _contract!.label.split('(').last.replaceAll(')', '').trim() : '';
+    return Card(
+      color: const Color(0xFFF7F8FC),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Row(children: [
+            Icon(Icons.local_shipping_rounded, color: AppColors.gold),
+            SizedBox(width: 8),
+            Expanded(child: Text('How DNR is paid', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
+          ]),
+          const SizedBox(height: 10),
+          const Text(
+            '1. Save the prices here (per trip, per ton...).\n'
+            '2. Record every paper delivery note in "Delivery notes (DNR)": number, date, site, item and quantity.\n'
+            '3. New payroll adds one DNR line per delivery note (quantity x price). A note is paid once only.\n'
+            '4. Fuel issued by us to a machine without a time rate card is deducted from its DNR total.',
+            style: TextStyle(fontSize: 13, height: 1.5),
+          ),
+          const Divider(height: 24),
+          ListenableBuilder(
+            listenable: Listenable.merge([for (final it in _dnrItems) ...[it.name, it.price]]),
+            builder: (context, _) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              for (final it in _dnrItems)
+                if (it.name.text.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(children: [
+                      Expanded(child: Text(it.name.text.trim(), style: const TextStyle(fontWeight: FontWeight.w600))),
+                      Text('${Fmt.money(numOrNull(it.price), cur.isEmpty ? null : cur)} / ${dnrUnits[it.unit]?.split(' ').first ?? it.unit}',
+                          style: const TextStyle(color: AppColors.muted)),
+                    ]),
+                  ),
+            ]),
+          ),
         ]),
       ),
     );

@@ -315,6 +315,14 @@ class _MachineCard extends StatelessWidget {
                 () => onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date, initial: state, access: access))));
           }
           break;
+        case 'Finished':
+          // checked out: a forgotten lunch can still be added, and the times corrected, until the day is submitted
+          if (att.str('day_status') == 'Working' && att.strOrNull('check_in_time') != null) {
+            actions.add(_primary('Add lunch / break', Icons.coffee_rounded, AppColors.onBreak,
+                () => onAction(downtimeSheet(context, att: att, type: 'Break', date: recordDate))));
+            actions.add(_secondary('Edit', Icons.edit_rounded, () => _details(context)));
+          }
+          break;
         case 'Absent':
         case 'Holiday':
           actions.add(_secondary('It came after all', Icons.login_rounded,
@@ -722,6 +730,16 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
               icon: const Icon(Icons.edit_rounded),
               label: const Text('Edit'),
             ),
+            // a pause (lunch...) can be added at any time on an editable Working row, also after the check-out
+            if (a.str('day_status') == 'Working' && a.strOrNull('check_in_time') != null && a.objOrNull('open_downtime') == null)
+              FilledButton.tonalIcon(
+                onPressed: () async {
+                  final ok = await downtimeSheet(context, att: a, type: 'Break', date: date);
+                  if (ok == true) await _reload();
+                },
+                icon: const Icon(Icons.coffee_rounded),
+                label: const Text('Add break'),
+              ),
             if (a.str('status') == 'Rejected') FilledButton.icon(onPressed: _resubmit, icon: const Icon(Icons.send_rounded), label: const Text('Send again')),
             if (a.str('status') == 'Draft')
               OutlinedButton.icon(

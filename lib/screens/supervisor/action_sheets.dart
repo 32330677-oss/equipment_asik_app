@@ -191,6 +191,10 @@ Future<bool?> checkInSheet(BuildContext context,
   var time = defaultTime(date, start: true, shift: shift);
   final past = date != Fmt.today();
   String? outTime;
+  // optional lunch break, recorded together with a whole past session (check-in + check-out)
+  var withLunch = false;
+  String? lunchFrom;
+  String? lunchTo;
   final meter = TextEditingController(text: machine.strOrNull('last_meter_end') ?? '');
   final meterEnd = TextEditingController();
   final remarks = TextEditingController();
@@ -209,6 +213,13 @@ Future<bool?> checkInSheet(BuildContext context,
       if (outTime != null && ms != null && me != null && me < ms) {
         throw ApiException(null, 'VALIDATION', 'The end meter ($me) is lower than the start meter ($ms).');
       }
+      final lunch = outTime != null && withLunch && lunchFrom != null && lunchTo != null;
+      if (lunch) {
+        final lf = Fmt.parse(lunchFrom)!, lt = Fmt.parse(lunchTo)!;
+        final si = Fmt.parse(time)!, so = Fmt.parse(outTime)!;
+        if (!lt.isAfter(lf)) throw ApiException(null, 'VALIDATION', 'The lunch must end after it starts.');
+        if (lf.isBefore(si) || lt.isAfter(so)) throw ApiException(null, 'VALIDATION', 'The lunch must be between the start and the end time.');
+      }
       final r = await Api.I.request('POST', '/equipment/attendance/check-in', body: {
         'equipment_id': machine.intv('equipment_id'), 'site_id': siteId, 'shift_type': shift, 'check_in_time': time,
         if (ms != null) 'meter_start': ms,
@@ -218,6 +229,16 @@ Future<bool?> checkInSheet(BuildContext context,
         if (textOrNull(late) != null) 'late_reason': textOrNull(late),
       });
       if (context.mounted) showWarnings(context, r);
+      if (lunch) {
+        // the session is saved; never rethrow here, or a second tap would try to check in again
+        try {
+          await Api.I.post('/equipment/attendance/${r.obj('data').intv('eq_attendance_id')}/downtime/start', {
+            'downtime_type': 'Break', 'start_time': lunchFrom, 'end_time': lunchTo, 'reason': 'Lunch',
+          });
+        } catch (e) {
+          if (context.mounted) showSnack(context, 'Session saved, but the lunch was not: open the row and tap "Add break". (${e is ApiException ? e.message : e})');
+        }
+      }
     },
     body: (ctx, set) => [
       ...lateReasonFields(access, late),
@@ -236,6 +257,27 @@ Future<bool?> checkInSheet(BuildContext context,
             padding: EdgeInsets.only(top: 4),
             child: Text('Add the end time to record the whole session from the paper sheet in one step.', style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
           ),
+        if (outTime != null) ...[
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: withLunch,
+            title: const Text('Lunch break'),
+            subtitle: const Text('Recorded as a Break inside this session'),
+            onChanged: (v) => set(() {
+              withLunch = v;
+              if (v && lunchFrom == null) {
+                final d = lunchDefault(time, outTime!);
+                lunchFrom = d.$1;
+                lunchTo = d.$2;
+              }
+            }),
+          ),
+          if (withLunch) ...[
+            TimeField(label: 'Lunch from', value: lunchFrom, baseDate: date, onChanged: (v) => set(() => lunchFrom = v ?? lunchFrom)),
+            _gap(),
+            TimeField(label: 'Lunch until', value: lunchTo, baseDate: date, onChanged: (v) => set(() => lunchTo = v ?? lunchTo)),
+          ],
+        ],
       ],
       if (hasMeter) ...[
         _gap(),
@@ -257,28 +299,69 @@ Future<bool?> checkInSheet(BuildContext context,
 }
 
 // ----------------------------------------------------------------- downtime
+/// Default lunch period inside a closed session: 12:00-13:00 of the check-in day when it fits,
+/// otherwise one hour in the middle of the session.
+(String, String) lunchDefault(String checkIn, String checkOut) {
+  final s = Fmt.parse(checkIn);
+  final e = Fmt.parse(checkOut);
+  if (s == null || e == null || !e.isAfter(s)) return (wall16(checkIn)!, wall16(checkOut)!);
+  final noon = DateTime(s.year, s.month, s.day, 12);
+  if (!noon.isBefore(s) && !noon.add(const Duration(hours: 1)).isAfter(e)) {
+    return (Fmt.wallOf(noon), Fmt.wallOf(noon.add(const Duration(hours: 1))));
+  }
+  final total = e.difference(s);
+  final len = total < const Duration(hours: 1) ? total : const Duration(hours: 1);
+  final from = s.add((total - len) ~/ 2);
+  return (Fmt.wallOf(from), Fmt.wallOf(from.add(len)));
+}
+
+/// Records a pause. On a session that is already checked out (Finished) the period must have an end:
+/// this is how a forgotten lunch break is added after the check-out.
 Future<bool?> downtimeSheet(BuildContext context, {required Json att, required String type, required String date}) {
-  var start = date == Fmt.today() ? Fmt.nowWall() : (att.strOrNull('check_in_time') ?? defaultTime(date, start: true));
+  final checkIn = att.strOrNull('check_in_time');
+  final checkOut = att.strOrNull('check_out_time');
+  final closed = checkIn != null && checkOut != null;
+  var start = date == Fmt.today() ? Fmt.nowWall() : (checkIn ?? defaultTime(date, start: true));
   String? end;
+  if (checkIn != null && checkOut != null) {
+    final d = lunchDefault(checkIn, checkOut);
+    start = d.$1;
+    end = d.$2;
+  }
   final reason = TextEditingController();
   final needsReason = type == 'Breakdown' || type == 'Standby';
   final quick = type == 'Breakdown' ? breakdownReasons : type == 'Standby' ? standbyReasons : const <String>[];
   final style = StateStyle.of(type == 'Break' || type == 'Refuel' ? 'OnBreak' : type);
   return showActionSheet(
     context,
-    title: {'Break': 'Start a break', 'Refuel': 'Refuelling', 'Breakdown': 'Report a breakdown', 'Standby': 'Machine on standby'}[type] ?? type,
-    subtitle: '${att.str('equipment_code')} · the clock stops until you resume',
+    title: closed
+        ? ({'Break': 'Add a break / lunch', 'Refuel': 'Add a refuelling stop', 'Breakdown': 'Add a breakdown', 'Standby': 'Add a standby period'}[type] ?? type)
+        : ({'Break': 'Start a break', 'Refuel': 'Refuelling', 'Breakdown': 'Report a breakdown', 'Standby': 'Machine on standby'}[type] ?? type),
+    subtitle: closed
+        ? '${att.str('equipment_code')} · session ${Fmt.time(checkIn)} - ${Fmt.time(checkOut)}'
+        : '${att.str('equipment_code')} · the clock stops until you resume',
     icon: type == 'Refuel' ? Icons.local_gas_station_rounded : style.icon,
     color: style.color,
     submitLabel: 'Save',
-    submit: () => Api.I.post('/equipment/attendance/${att.intv('eq_attendance_id')}/downtime/start', {
-      'downtime_type': type, 'start_time': start, if (end != null) 'end_time': end,
-      if (textOrNull(reason) != null) 'reason': textOrNull(reason),
-    }),
+    submit: () async {
+      if (closed && end == null) {
+        throw ApiException(null, 'VALIDATION', 'The machine is already checked out: set when the pause ended.');
+      }
+      await Api.I.post('/equipment/attendance/${att.intv('eq_attendance_id')}/downtime/start', {
+        'downtime_type': type, 'start_time': start, if (end != null) 'end_time': end,
+        if (textOrNull(reason) != null) 'reason': textOrNull(reason),
+      });
+    },
     body: (ctx, set) => [
       TimeField(label: 'From', value: start, baseDate: date, onChanged: (v) => set(() => start = v ?? start)),
       _gap(),
-      TimeField(label: 'Until (leave empty if still going)', value: end, baseDate: date, clearable: true, onChanged: (v) => set(() => end = v)),
+      TimeField(
+        label: closed ? 'Until' : 'Until (leave empty if still going)',
+        value: end,
+        baseDate: date,
+        clearable: !closed,
+        onChanged: (v) => set(() => end = closed ? (v ?? end) : v),
+      ),
       if (quick.isNotEmpty) ...[
         _gap(),
         Wrap(spacing: 8, runSpacing: 8, children: [

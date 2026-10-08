@@ -11,7 +11,7 @@ import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 
 /// Shown with the blockers but never stop the generation.
-const _infoOnly = {'IN_OTHER_BATCH', 'SCAN_MISSING', 'IN_CLOSED_PERIOD'};
+const _infoOnly = {'IN_OTHER_BATCH', 'SCAN_MISSING', 'IN_CLOSED_PERIOD', 'MONTHLY_DAYS_WITHOUT_ROWS'};
 
 const _blockerHelp = {
   'NOT_APPROVED': 'Approve or reject them in Attendance review.',
@@ -26,6 +26,8 @@ const _blockerHelp = {
   'SCAN_MISSING': 'Information only: the accountant must upload these signed sheets (Paper sheets) before the Admin finalizes.',
   'IN_CLOSED_PERIOD': 'Information only: these dates are in a finalized (closed) period. No new batch pays them: '
       'use an official Correction from Attendance review (or from the paid batch item).',
+  'MONTHLY_DAYS_WITHOUT_ROWS': 'Information only: check these days before generating. If the machine worked, the supervisor must record '
+      'the day; if it did not, record it as Absent, Standby or Breakdown so the deduction is intended.',
 };
 
 /// Accepting blockers is a decision kept on the batch: ask why (at least 5 characters).

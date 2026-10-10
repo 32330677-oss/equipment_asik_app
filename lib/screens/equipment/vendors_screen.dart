@@ -129,6 +129,7 @@ class _VendorCard extends StatelessWidget {
                       maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
                 ]),
               ),
+              if (v.str('vendor_type') == 'Individual') const Padding(padding: EdgeInsets.only(right: 6), child: Pill('Individual', color: AppColors.info)),
               if (inactive) const Pill('Inactive', color: AppColors.neutral),
             ]),
             const SizedBox(height: 14),
@@ -168,25 +169,42 @@ Future<Json?> showVendorDialog(BuildContext context, {Json? vendor}) {
   final email = TextEditingController(text: v?.str('email'));
   final address = TextEditingController(text: v?.str('address'));
   final tax = TextEditingController(text: v?.str('tax_number'));
+  final nationalId = TextEditingController(text: v?.str('national_id'));
   final notes = TextEditingController(text: v?.str('notes'));
+  // a person renting us a machine without a company is an Individual: identified by the ID card, not a tax number
+  var type = v?.strOrNull('vendor_type') ?? 'Company';
   return showFormDialog<Json>(
     context,
     title: v == null ? 'New vendor' : 'Edit ${v.str('vendor_name')}',
     onSave: () async {
       final body = {
-        'vendor_name': name.text.trim(), 'contact_person': textOrNull(contact), 'phone_number': textOrNull(phone), 'email': textOrNull(email),
+        'vendor_name': name.text.trim(), 'vendor_type': type, 'national_id': textOrNull(nationalId), 'contact_person': textOrNull(contact), 'phone_number': textOrNull(phone), 'email': textOrNull(email),
         'address': textOrNull(address), 'tax_number': textOrNull(tax), 'notes': textOrNull(notes),
       }..removeWhere((k, x) => x == null);
       return asJson(v == null ? await Api.I.post('/equipment/vendors', body) : await Api.I.put('/equipment/vendors/${v.intv('vendor_id')}', body));
     },
-    body: (ctx, set) => FormGrid(children: [
-      textField(name, 'Company name', required: true),
-      textField(contact, 'Contact person'),
-      textField(phone, 'Phone'),
-      textField(email, 'Email'),
-      textField(address, 'Address'),
-      textField(tax, 'Tax number'),
-      textField(notes, 'Notes', maxLines: 2),
+    body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SegmentedButton<String>(
+        segments: const [
+          ButtonSegment(value: 'Company', icon: Icon(Icons.business_rounded), label: Text('Company')),
+          ButtonSegment(value: 'Individual', icon: Icon(Icons.person_rounded), label: Text('Individual')),
+        ],
+        selected: {type},
+        onSelectionChanged: (x) => set(() => type = x.first),
+      ),
+      const SizedBox(height: 4),
+      Text(type == 'Individual' ? 'One person renting us a machine, without a company: the ID number is printed on vouchers and invoices.' : 'A company: the tax number is printed on vouchers.',
+          style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+      const SizedBox(height: 12),
+      FormGrid(children: [
+        textField(name, type == 'Individual' ? 'Full name' : 'Company name', required: true),
+        if (type == 'Company') textField(contact, 'Contact person'),
+        textField(phone, 'Phone'),
+        textField(email, 'Email'),
+        textField(address, 'Address'),
+        if (type == 'Individual') textField(nationalId, 'National ID number') else textField(tax, 'Tax number'),
+        textField(notes, 'Notes', maxLines: 2),
+      ]),
     ]),
   );
 }
@@ -364,7 +382,11 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
                             InfoRow('Phone', v.str('phone_number'), width: 110),
                             InfoRow('Email', v.str('email'), width: 110),
                             InfoRow('Address', v.str('address'), width: 110),
-                            InfoRow('Tax number', v.str('tax_number'), width: 110),
+                            InfoRow('Type', v.str('vendor_type') == 'Individual' ? 'Individual (person)' : 'Company', width: 110),
+                            if (v.str('vendor_type') == 'Individual')
+                              InfoRow('National ID', v.str('national_id'), width: 110)
+                            else
+                              InfoRow('Tax number', v.str('tax_number'), width: 110),
                           ]),
                         ),
                       ]),

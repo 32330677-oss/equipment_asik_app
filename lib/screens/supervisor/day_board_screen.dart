@@ -498,7 +498,10 @@ class _MachineCard extends StatelessWidget {
           if (att.str('day_status') == 'Working' && att.strOrNull('check_in_time') != null) {
             actions.add(_primary('Add lunch / break', Icons.coffee_rounded, AppColors.onBreak,
                 () => onAction(downtimeSheet(context, att: att, type: 'Break', date: recordDate))));
-            actions.add(_secondary('Edit', Icons.edit_rounded, () => _details(context)));
+            // same width as the old "Edit" button: Edit times, or replace the session by a whole-day status
+            // (a machine recorded as working that was in fact broken / absent). The server asks to confirm the
+            // replacement; the row keeps its paper sheet number and the old times stay in the history.
+            actions.add(_editMenu(context));
           }
           break;
         case 'Absent':
@@ -610,6 +613,40 @@ class _MachineCard extends StatelessWidget {
         height: 48,
         child: OutlinedButton.icon(onPressed: onTap, icon: Icon(icon, size: 20), label: Text(label)),
       );
+
+  Widget _editMenu(BuildContext context) {
+    return SizedBox(
+      height: 48,
+      child: PopupMenuButton<String>(
+        tooltip: 'Edit',
+        onSelected: (v) {
+          if (v == 'times') _details(context);
+          if (v == 'day') onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date, initial: 'Breakdown', access: access));
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'times', child: ListTile(leading: Icon(Icons.edit_rounded), title: Text('Edit times'))),
+          PopupMenuItem(
+            value: 'day',
+            child: ListTile(
+              leading: Icon(Icons.event_busy_rounded, color: AppColors.breakdown),
+              title: Text('Did not work'),
+              subtitle: Text('Breakdown, standby, absent... replaces the times'),
+            ),
+          ),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(10)),
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.edit_rounded, size: 20),
+            SizedBox(width: 6),
+            Text('Edit', style: TextStyle(fontWeight: FontWeight.w600)),
+            Icon(Icons.arrow_drop_down_rounded),
+          ]),
+        ),
+      ),
+    );
+  }
 
   Widget _downtimeMenu(BuildContext context, Json att) {
     return SizedBox(

@@ -12,9 +12,8 @@ import '../../widgets/ui.dart';
 const breakdownReasons = ['Hydraulic leak', 'Engine problem', 'Tyre / track', 'Electrical', 'Waiting for mechanic', 'Accident damage'];
 const standbyReasons = ['No work available', 'Waiting for material', 'Waiting for instructions', 'Weather', 'Site closed', 'No operator'];
 
-/// Default wall time for an action on [date] when it is not today.
-String defaultTime(String date, {required bool start, String shift = 'Day'}) {
-  if (date == Fmt.today()) return Fmt.nowWall();
+/// The usual start or end of a shift on [date]: Day 07:00 - 17:00, Night 19:00 - 05:00 of the next morning.
+String shiftTime(String date, {required bool start, String shift = 'Day'}) {
   final d = Fmt.parse(date) ?? Fmt.now();
   if (shift == 'Night') {
     return start ? Fmt.wallOf(DateTime(d.year, d.month, d.day, 19)) : Fmt.wallOf(DateTime(d.year, d.month, d.day + 1, 5));
@@ -22,28 +21,131 @@ String defaultTime(String date, {required bool start, String shift = 'Day'}) {
   return Fmt.wallOf(DateTime(d.year, d.month, d.day, start ? 7 : 17));
 }
 
-/// Big, touch-friendly time field ('yyyy-MM-dd HH:mm'). Shows the day when it differs from [baseDate].
+/// Default wall time for an action on [date]: now on today, the usual shift time on another day.
+String defaultTime(String date, {required bool start, String shift = 'Day'}) {
+  if (date == Fmt.today()) return Fmt.nowWall();
+  return shiftTime(date, start: start, shift: shift);
+}
+
+/// 'yyyy-MM-dd' [days] after [date].
+String addDaysTo(String date, int days) {
+  final d = Fmt.parse(date) ?? Fmt.now();
+  return Fmt.dateOf(DateTime(d.year, d.month, d.day + days));
+}
+
+/// True when [date] is the business day running now: today, or - early in the morning - last night's shift,
+/// which started yesterday and is still going after midnight.
+bool isLiveDay(String? date, {String shift = 'Day'}) {
+  if (date == null) return true;
+  final today = Fmt.today();
+  if (date == today) return true;
+  if (shift != 'Night' || date != addDaysTo(today, -1)) return false;
+  final end = Fmt.parse(shiftTime(date, start: false, shift: 'Night'));
+  return end != null && Fmt.now().isBefore(end.add(const Duration(hours: 3)));
+}
+
+/// A start time on the shift of [date]: the picked clock time [v] goes on [date]; on a night shift a time before 12:00
+/// is after midnight, so on the next day (the server files it under the same night).
+String alignStart(String v, String? date, {String shift = 'Day'}) {
+  if (date == null) return v;
+  final d = Fmt.parse(date);
+  final p = Fmt.parse(v);
+  if (d == null || p == null) return v;
+  final next = shift == 'Night' && p.hour < 12 ? 1 : 0;
+  return Fmt.wallOf(DateTime(d.year, d.month, d.day + next, p.hour, p.minute));
+}
+
+/// The end of a session placed after its start:
+/// the picked clock time [v] is put on the day of [after]; on a night shift a time not after [after] goes to the next day
+/// (in 19:00 -> out 05:00 = 05:00 of the next morning). A day shift never crosses midnight on its own.
+String alignAfter(String v, String? after, {String shift = 'Day'}) {
+  if (after == null) return v;
+  final a = Fmt.parse(after);
+  final p = Fmt.parse(v);
+  if (a == null || p == null) return v;
+  var d = DateTime(a.year, a.month, a.day, p.hour, p.minute);
+  if (shift == 'Night' && !d.isAfter(a)) d = DateTime(a.year, a.month, a.day + 1, p.hour, p.minute);
+  return Fmt.wallOf(d);
+}
+
+/// The default end for a session started at [start] on [date]: now while the day is running, otherwise the end of the shift.
+/// Never in the future and never before the start.
+String? defaultEnd(String date, String start, {String shift = 'Day'}) {
+  final now = Fmt.now();
+  final s = Fmt.parse(start);
+  var end = alignAfter(shiftTime(date, start: false, shift: shift), start, shift: shift);
+  final e = Fmt.parse(end);
+  if (e == null || e.isAfter(now)) end = Fmt.nowWall();
+  final f = Fmt.parse(end);
+  if (s != null && f != null && !f.isAfter(s)) return null;
+  return end;
+}
+
+/// Refuses an end that is not after its start (before anything is sent).
+void assertTimeOrder(String? start, String? end, {String what = 'The end time'}) {
+  if (start == null || end == null) return;
+  final s = Fmt.parse(start);
+  final e = Fmt.parse(end);
+  if (s != null && e != null && !e.isAfter(s)) {
+    throw ApiException(null, 'VALIDATION', '$what (${Fmt.time(end)}) must be after the start (${Fmt.time(start)}).');
+  }
+}
+
+/// Big, touch-friendly time field ('yyyy-MM-dd HH:mm').
+///
+/// * Tapping asks only the clock time; the day comes from the field itself: [after] (the start of the same session) for an
+///   end time, [baseDate] otherwise - never from the phone's "today" (a past day stays on that day).
+/// * On a night shift an end time earlier than its start goes to the next day and the field shows "Next day".
+/// * "Now" is offered only while [baseDate] is running; "Other day" stays available for the rare exception.
 class TimeField extends StatelessWidget {
-  const TimeField({super.key, required this.label, required this.value, required this.onChanged, this.baseDate, this.clearable = false});
+  const TimeField({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.onChanged,
+    this.baseDate,
+    this.clearable = false,
+    this.shift = 'Day',
+    this.after,
+  });
   final String label;
   final String? value;
   final String? baseDate;
   final ValueChanged<String?> onChanged;
   final bool clearable;
+  final String shift;
+
+  /// The start this time must follow (the check-in for a check-out, the "from" of a pause...).
+  final String? after;
+
+  /// The time the picker opens on when the field is empty.
+  String _seed() {
+    final live = isLiveDay(baseDate, shift: shift);
+    if (live) return Fmt.nowWall();
+    final base = baseDate ?? Fmt.today();
+    final t = defaultTime(base, start: after == null, shift: shift);
+    return after == null ? t : alignAfter(t, after, shift: shift);
+  }
 
   @override
   Widget build(BuildContext context) {
     final has = value != null;
-    final otherDay = has && baseDate != null && Fmt.dateOf(Fmt.parse(value)!) != baseDate;
+    final ref = after != null ? after!.substring(0, 10) : baseDate;
+    final day = has ? value!.substring(0, 10) : null;
+    final otherDay = has && ref != null && day != ref;
+    final nextDay = otherDay && ref != null && day == addDaysTo(ref, 1);
+    final expected = nextDay && shift == 'Night';
+    final live = isLiveDay(baseDate, shift: shift);
     return Container(
       decoration: BoxDecoration(border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(12)),
       padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
       child: Row(children: [
         Expanded(
           child: InkWell(
+            borderRadius: BorderRadius.circular(8),
             onTap: () async {
-              final v = await pickDateTime(context, initial: value ?? Fmt.nowWall(), askDate: false);
-              if (v != null) onChanged(v);
+              final v = await pickDateTime(context, initial: value ?? _seed(), askDate: false);
+              if (v != null) onChanged(after != null ? alignAfter(v, after, shift: shift) : alignStart(v, baseDate, shift: shift));
             },
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(label, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
@@ -51,22 +153,29 @@ class TimeField extends StatelessWidget {
                 Text(has ? Fmt.time(value) : '--:--', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: AppColors.navy)),
                 if (otherDay) ...[
                   const SizedBox(width: 8),
-                  Pill(Fmt.dayLabel(value!.substring(0, 10)), color: AppColors.standby),
+                  Flexible(
+                    child: Pill(
+                      nextDay ? 'Next day · ${Fmt.dayLabel(day)}' : Fmt.dayLabel(day),
+                      color: expected ? AppColors.navy : AppColors.standby,
+                      icon: expected ? Icons.nightlight_round : Icons.warning_amber_rounded,
+                    ),
+                  ),
                 ],
               ]),
             ]),
           ),
         ),
-        IconButton(
-          tooltip: 'Now',
-          icon: const Icon(Icons.update_rounded),
-          onPressed: () => onChanged(Fmt.nowWall()),
-        ),
+        if (live)
+          IconButton(
+            tooltip: 'Now',
+            icon: const Icon(Icons.update_rounded),
+            onPressed: () => onChanged(Fmt.nowWall()),
+          ),
         IconButton(
           tooltip: 'Other day',
-          icon: const Icon(Icons.event_rounded),
+          icon: const Icon(Icons.event_rounded, color: AppColors.muted),
           onPressed: () async {
-            final v = await pickDateTime(context, initial: value ?? Fmt.nowWall(), askDate: true);
+            final v = await pickDateTime(context, initial: value ?? _seed(), askDate: true);
             if (v != null) onChanged(v);
           },
         ),
@@ -189,8 +298,9 @@ void showWarnings(BuildContext context, Json envelope) {
 Future<bool?> checkInSheet(BuildContext context,
     {required Json machine, required int siteId, required String shift, required String date, Json access = const {}}) {
   var time = defaultTime(date, start: true, shift: shift);
-  final past = date != Fmt.today();
-  String? outTime;
+  // a day that is over is usually entered from the paper sheet: the end of the shift is filled in too (clear it if still working)
+  final past = !isLiveDay(date, shift: shift);
+  String? outTime = past ? defaultEnd(date, time, shift: shift) : null;
   // optional lunch break, recorded together with a whole past session (check-in + check-out)
   var withLunch = false;
   String? lunchFrom;
@@ -210,6 +320,7 @@ Future<bool?> checkInSheet(BuildContext context,
     submit: () async {
       final ms = numOrNull(meter);
       final me = numOrNull(meterEnd);
+      assertTimeOrder(time, outTime);
       if (outTime != null && ms != null && me != null && me < ms) {
         throw ApiException(null, 'VALIDATION', 'The end meter ($me) is lower than the start meter ($ms).');
       }
@@ -221,7 +332,7 @@ Future<bool?> checkInSheet(BuildContext context,
         if (lf.isBefore(si) || lt.isAfter(so)) throw ApiException(null, 'VALIDATION', 'The lunch must be between the start and the end time.');
       }
       final r = await Api.I.request('POST', '/equipment/attendance/check-in', body: {
-        'equipment_id': machine.intv('equipment_id'), 'site_id': siteId, 'shift_type': shift, 'check_in_time': time,
+        'equipment_id': machine.intv('equipment_id'), 'site_id': siteId, 'shift_type': shift, 'record_date': date, 'check_in_time': time,
         if (ms != null) 'meter_start': ms,
         if (outTime != null) 'check_out_time': outTime,
         if (outTime != null && me != null) 'meter_end': me,
@@ -242,21 +353,50 @@ Future<bool?> checkInSheet(BuildContext context,
     },
     body: (ctx, set) => [
       ...lateReasonFields(access, late),
-      TimeField(label: 'Start time', value: time, baseDate: date, onChanged: (v) => set(() => time = v ?? time)),
+      TimeField(
+        label: 'Start time',
+        value: time,
+        baseDate: date,
+        shift: shift,
+        onChanged: (v) => set(() {
+          time = v ?? time;
+          // the end keeps its clock time and follows the start (next morning on a night shift)
+          if (outTime != null) outTime = alignAfter(outTime!, time, shift: shift);
+          if (withLunch && outTime != null) {
+            final d = lunchDefault(time, outTime!);
+            lunchFrom = d.$1;
+            lunchTo = d.$2;
+          }
+        }),
+      ),
       if (past) ...[
         _gap(),
         TimeField(
-          label: 'End time (if the day is already over)',
+          label: 'End time',
           value: outTime,
           baseDate: date,
+          shift: shift,
+          after: time,
           clearable: true,
-          onChanged: (v) => set(() => outTime = v),
+          onChanged: (v) => set(() {
+            outTime = v;
+            if (v == null) withLunch = false;
+            if (withLunch && v != null) {
+              final d = lunchDefault(time, v);
+              lunchFrom = d.$1;
+              lunchTo = d.$2;
+            }
+          }),
         ),
-        if (outTime == null)
-          const Padding(
-            padding: EdgeInsets.only(top: 4),
-            child: Text('Add the end time to record the whole session from the paper sheet in one step.', style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            outTime == null
+                ? 'Add the end time to record the whole session from the paper sheet in one step.'
+                : 'Clear the end time only if the machine was still working.',
+            style: const TextStyle(color: AppColors.muted, fontSize: 12.5),
           ),
+        ),
         if (outTime != null) ...[
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -273,9 +413,9 @@ Future<bool?> checkInSheet(BuildContext context,
             }),
           ),
           if (withLunch) ...[
-            TimeField(label: 'Lunch from', value: lunchFrom, baseDate: date, onChanged: (v) => set(() => lunchFrom = v ?? lunchFrom)),
+            TimeField(label: 'Lunch from', value: lunchFrom, baseDate: date, shift: shift, after: time, onChanged: (v) => set(() => lunchFrom = v ?? lunchFrom)),
             _gap(),
-            TimeField(label: 'Lunch until', value: lunchTo, baseDate: date, onChanged: (v) => set(() => lunchTo = v ?? lunchTo)),
+            TimeField(label: 'Lunch until', value: lunchTo, baseDate: date, shift: shift, after: lunchFrom, onChanged: (v) => set(() => lunchTo = v ?? lunchTo)),
           ],
         ],
       ],
@@ -321,7 +461,8 @@ Future<bool?> downtimeSheet(BuildContext context, {required Json att, required S
   final checkIn = att.strOrNull('check_in_time');
   final checkOut = att.strOrNull('check_out_time');
   final closed = checkIn != null && checkOut != null;
-  var start = date == Fmt.today() ? Fmt.nowWall() : (checkIn ?? defaultTime(date, start: true));
+  final shift = att.str('shift_type', 'Day');
+  var start = isLiveDay(date, shift: shift) ? Fmt.nowWall() : (wall16(checkIn) ?? defaultTime(date, start: true, shift: shift));
   String? end;
   if (checkIn != null && checkOut != null) {
     final d = lunchDefault(checkIn, checkOut);
@@ -347,18 +488,31 @@ Future<bool?> downtimeSheet(BuildContext context, {required Json att, required S
       if (closed && end == null) {
         throw ApiException(null, 'VALIDATION', 'The machine is already checked out: set when the pause ended.');
       }
+      assertTimeOrder(start, end, what: 'The end of the pause');
       await Api.I.post('/equipment/attendance/${att.intv('eq_attendance_id')}/downtime/start', {
         'downtime_type': type, 'start_time': start, if (end != null) 'end_time': end,
         if (textOrNull(reason) != null) 'reason': textOrNull(reason),
       });
     },
     body: (ctx, set) => [
-      TimeField(label: 'From', value: start, baseDate: date, onChanged: (v) => set(() => start = v ?? start)),
+      TimeField(
+        label: 'From',
+        value: start,
+        baseDate: date,
+        shift: shift,
+        after: wall16(checkIn),
+        onChanged: (v) => set(() {
+          start = v ?? start;
+          if (end != null) end = alignAfter(end!, start, shift: shift);
+        }),
+      ),
       _gap(),
       TimeField(
         label: closed ? 'Until' : 'Until (leave empty if still going)',
         value: end,
         baseDate: date,
+        shift: shift,
+        after: start,
         clearable: !closed,
         onChanged: (v) => set(() => end = closed ? (v ?? end) : v),
       ),
@@ -377,7 +531,9 @@ Future<bool?> downtimeSheet(BuildContext context, {required Json att, required S
 
 Future<bool?> endDowntimeSheet(BuildContext context, {required Json att, required String date}) {
   final p = att.obj('open_downtime');
-  var end = date == Fmt.today() ? Fmt.nowWall() : defaultTime(date, start: false);
+  final shift = att.str('shift_type', 'Day');
+  final from = wall16(p.strOrNull('start_time'));
+  var end = isLiveDay(date, shift: shift) ? Fmt.nowWall() : (from == null ? defaultTime(date, start: false, shift: shift) : (defaultEnd(date, from, shift: shift) ?? from));
   final type = p.str('downtime_type');
   return showActionSheet(
     context,
@@ -386,16 +542,24 @@ Future<bool?> endDowntimeSheet(BuildContext context, {required Json att, require
     icon: Icons.play_arrow_rounded,
     color: AppColors.working,
     submitLabel: 'Back to work',
-    submit: () => Api.I.post('/equipment/attendance/${att.intv('eq_attendance_id')}/downtime/${p.intv('downtime_id')}/end', {'end_time': end}),
+    submit: () async {
+      assertTimeOrder(from, end, what: 'The end of the $type');
+      await Api.I.post('/equipment/attendance/${att.intv('eq_attendance_id')}/downtime/${p.intv('downtime_id')}/end', {'end_time': end});
+    },
     body: (ctx, set) => [
-      TimeField(label: 'End of $type', value: end, baseDate: date, onChanged: (v) => set(() => end = v ?? end)),
+      TimeField(label: 'End of $type', value: end, baseDate: date, shift: shift, after: from, onChanged: (v) => set(() => end = v ?? end)),
     ],
   );
 }
 
 // ----------------------------------------------------------------- check-out
 Future<bool?> checkOutSheet(BuildContext context, {required Json machine, required Json att, required String date, required String shift}) {
-  var time = date == Fmt.today() && att.str('record_date') == date ? Fmt.nowWall() : defaultTime(att.str('record_date'), start: false, shift: shift);
+  final recordDate = att.str('record_date', date);
+  final checkIn = wall16(att.strOrNull('check_in_time'));
+  // the session's own day (not the phone's today): now while it is running, otherwise the end of its shift
+  var time = isLiveDay(recordDate, shift: shift) || checkIn == null
+      ? Fmt.nowWall()
+      : (defaultEnd(recordDate, checkIn, shift: shift) ?? Fmt.nowWall());
   final meter = TextEditingController();
   final work = TextEditingController(text: att.str('work_description'));
   final remarks = TextEditingController();
@@ -404,12 +568,13 @@ Future<bool?> checkOutSheet(BuildContext context, {required Json machine, requir
   return showActionSheet(
     context,
     title: 'Check out ${att.str('equipment_code')}',
-    subtitle: 'Started ${Fmt.time(att.str('check_in_time'))}',
+    subtitle: 'Started ${Fmt.dayLabel(recordDate)} at ${Fmt.time(att.str('check_in_time'))}',
     icon: Icons.logout_rounded,
     color: AppColors.navy,
     submitLabel: 'Finish the day',
     submit: () async {
       final m = numOrNull(meter);
+      assertTimeOrder(checkIn, time);
       if (m != null && meterStart != null && m < meterStart) {
         throw ApiException(null, 'VALIDATION', 'The end meter ($m) is lower than the start meter ($meterStart).');
       }
@@ -421,7 +586,7 @@ Future<bool?> checkOutSheet(BuildContext context, {required Json machine, requir
       });
     },
     body: (ctx, set) => [
-      TimeField(label: 'End time', value: time, baseDate: att.str('record_date'), onChanged: (v) => set(() => time = v ?? time)),
+      TimeField(label: 'End time', value: time, baseDate: recordDate, shift: shift, after: checkIn, onChanged: (v) => set(() => time = v ?? time)),
       _gap(),
       // daily fuel is not recorded here: fuel is handled by the approximate-fuel policy and the office's fuel issues
       if (hasMeter) ...[
@@ -441,8 +606,8 @@ Future<bool?> dayStatusSheet(BuildContext context,
   var status = initial ?? 'Standby';
   final late = TextEditingController();
   var withTimes = false;
-  var from = defaultTime(date, start: true, shift: shift);
-  var to = defaultTime(date, start: false, shift: shift);
+  var from = shiftTime(date, start: true, shift: shift);
+  var to = defaultEnd(date, from, shift: shift) ?? alignAfter(shiftTime(date, start: false, shift: shift), from, shift: shift);
   final remarks = TextEditingController();
   var discard = false;
 
@@ -464,6 +629,7 @@ Future<bool?> dayStatusSheet(BuildContext context,
     color: StateStyle.of(status).color,
     submitLabel: 'Save day',
     submit: () async {
+      if (withTimes && (status == 'Standby' || status == 'Breakdown')) assertTimeOrder(from, to);
       try {
         await send();
       } on ApiException catch (e) {
@@ -516,9 +682,18 @@ Future<bool?> dayStatusSheet(BuildContext context,
           title: const Text('Record the hours on site'),
         ),
         if (withTimes) ...[
-          TimeField(label: 'From', value: from, baseDate: date, onChanged: (v) => set(() => from = v ?? from)),
+          TimeField(
+            label: 'From',
+            value: from,
+            baseDate: date,
+            shift: shift,
+            onChanged: (v) => set(() {
+              from = v ?? from;
+              to = alignAfter(to, from, shift: shift);
+            }),
+          ),
           _gap(),
-          TimeField(label: 'To', value: to, baseDate: date, onChanged: (v) => set(() => to = v ?? to)),
+          TimeField(label: 'To', value: to, baseDate: date, shift: shift, after: from, onChanged: (v) => set(() => to = v ?? to)),
         ],
       ],
       _gap(),
@@ -531,13 +706,14 @@ Future<bool?> dayStatusSheet(BuildContext context,
 Future<bool?> editRowSheet(BuildContext context, {required Json att, int? vendorId}) {
   final working = att.str('day_status') == 'Working';
   final timed = working || att.strOrNull('check_in_time') != null;
-  var inT = att.strOrNull('check_in_time');
-  var outT = att.strOrNull('check_out_time');
+  var inT = wall16(att.strOrNull('check_in_time'));
+  var outT = wall16(att.strOrNull('check_out_time'));
   final mStart = TextEditingController(text: att.str('meter_start'));
   final mEnd = TextEditingController(text: att.str('meter_end'));
   final work = TextEditingController(text: att.str('work_description'));
   final remarks = TextEditingController(text: att.str('remarks'));
   final date = att.str('record_date');
+  final shift = att.str('shift_type', 'Day');
   return showActionSheet(
     context,
     title: 'Edit ${att.str('equipment_code')} · ${Fmt.dayLabel(date)}',
@@ -546,9 +722,10 @@ Future<bool?> editRowSheet(BuildContext context, {required Json att, int? vendor
     color: AppColors.navy,
     submitLabel: 'Save changes',
     submit: () {
+      assertTimeOrder(inT, outT);
       final body = <String, dynamic>{};
-      if (inT != att.strOrNull('check_in_time') && inT != null) body['check_in_time'] = inT;
-      if (outT != att.strOrNull('check_out_time') && outT != null) body['check_out_time'] = outT;
+      if (inT != wall16(att.strOrNull('check_in_time')) && inT != null) body['check_in_time'] = inT;
+      if (outT != wall16(att.strOrNull('check_out_time')) && outT != null) body['check_out_time'] = outT;
       if (working) {
         if (mStart.text.trim() != att.str('meter_start') && numOrNull(mStart) != null) body['meter_start'] = numOrNull(mStart);
         if (mEnd.text.trim() != att.str('meter_end') && numOrNull(mEnd) != null) body['meter_end'] = numOrNull(mEnd);
@@ -560,9 +737,18 @@ Future<bool?> editRowSheet(BuildContext context, {required Json att, int? vendor
     },
     body: (ctx, set) => [
       if (timed) ...[
-        TimeField(label: 'Start', value: inT, baseDate: date, onChanged: (v) => set(() => inT = v ?? inT)),
+        TimeField(
+          label: 'Start',
+          value: inT,
+          baseDate: date,
+          shift: shift,
+          onChanged: (v) => set(() {
+            inT = v ?? inT;
+            if (outT != null) outT = alignAfter(outT!, inT, shift: shift);
+          }),
+        ),
         _gap(),
-        TimeField(label: 'End', value: outT, baseDate: date, onChanged: (v) => set(() => outT = v ?? outT)),
+        TimeField(label: 'End', value: outT, baseDate: date, shift: shift, after: inT, onChanged: (v) => set(() => outT = v ?? outT)),
         _gap(),
       ],
       if (working) ...[
@@ -587,8 +773,10 @@ Future<bool?> downtimeEditSheet(BuildContext context, {required Json att, requir
   final oldType = period.str('downtime_type');
   final oldStart = wall16(period.strOrNull('start_time'));
   final oldEnd = wall16(period.strOrNull('end_time'));
+  final shift = att.str('shift_type', 'Day');
+  final checkIn = wall16(att.strOrNull('check_in_time'));
   var type = oldType;
-  var start = oldStart ?? defaultTime(date, start: true);
+  var start = oldStart ?? defaultTime(date, start: true, shift: shift);
   var end = oldEnd;
   final reason = TextEditingController(text: period.str('reason'));
   bool needsReason() => type == 'Breakdown' || type == 'Standby';
@@ -600,6 +788,7 @@ Future<bool?> downtimeEditSheet(BuildContext context, {required Json att, requir
     color: AppColors.navy,
     submitLabel: 'Save',
     submit: () async {
+      assertTimeOrder(start, end, what: 'The end of the pause');
       final body = <String, dynamic>{
         if (type != oldType) 'downtime_type': type,
         if (start != oldStart) 'start_time': start,
@@ -622,9 +811,26 @@ Future<bool?> downtimeEditSheet(BuildContext context, {required Json att, requir
         onSelectionChanged: (v) => set(() => type = v.first),
       ),
       _gap(),
-      TimeField(label: 'From', value: start, baseDate: date, onChanged: (v) => set(() => start = v ?? start)),
+      TimeField(
+        label: 'From',
+        value: start,
+        baseDate: date,
+        shift: shift,
+        after: checkIn,
+        onChanged: (v) => set(() {
+          start = v ?? start;
+          if (end != null) end = alignAfter(end!, start, shift: shift);
+        }),
+      ),
       _gap(),
-      TimeField(label: oldEnd == null ? 'Until (leave empty if still going)' : 'Until', value: end, baseDate: date, onChanged: (v) => set(() => end = v ?? end)),
+      TimeField(
+        label: oldEnd == null ? 'Until (leave empty if still going)' : 'Until',
+        value: end,
+        baseDate: date,
+        shift: shift,
+        after: start,
+        onChanged: (v) => set(() => end = v ?? end),
+      ),
       _gap(),
       textField(reason, needsReason() ? 'Reason' : 'Note', required: needsReason(), maxLines: 2),
     ],
@@ -638,6 +844,7 @@ Future<bool?> downtimeEditSheet(BuildContext context, {required Json att, requir
 Future<bool?> changeRequestSheet(BuildContext context, {required Json att}) {
   final date = att.str('record_date');
   final oldStatus = att.str('day_status');
+  final shift = att.str('shift_type', 'Day');
   final oldIn = wall16(att.strOrNull('check_in_time'));
   final oldOut = wall16(att.strOrNull('check_out_time'));
   var status = oldStatus;
@@ -662,6 +869,7 @@ Future<bool?> changeRequestSheet(BuildContext context, {required Json att}) {
       if (status == 'Working' && (inT == null || outT == null)) {
         throw ApiException(null, 'VALIDATION', 'A working day needs the start and the end time: set both.');
       }
+      assertTimeOrder(inT, outT);
       if (!timed && (oldIn != null || oldOut != null)) {
         changes['check_in_time'] = null;
         changes['check_out_time'] = null;
@@ -690,9 +898,18 @@ Future<bool?> changeRequestSheet(BuildContext context, {required Json att}) {
       ),
       if (status == 'Working' || status == 'Standby' || status == 'Breakdown') ...[
         _gap(),
-        TimeField(label: 'Start', value: inT, baseDate: date, onChanged: (v) => set(() => inT = v ?? inT)),
+        TimeField(
+          label: 'Start',
+          value: inT,
+          baseDate: date,
+          shift: shift,
+          onChanged: (v) => set(() {
+            inT = v ?? inT;
+            if (outT != null) outT = alignAfter(outT!, inT, shift: shift);
+          }),
+        ),
         _gap(),
-        TimeField(label: 'End', value: outT, baseDate: date, onChanged: (v) => set(() => outT = v ?? outT)),
+        TimeField(label: 'End', value: outT, baseDate: date, shift: shift, after: inT, onChanged: (v) => set(() => outT = v ?? outT)),
       ],
       if (status == 'Working') ...[
         _gap(),

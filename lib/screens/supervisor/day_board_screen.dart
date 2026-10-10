@@ -9,6 +9,7 @@ import '../../core/theme.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 import 'action_sheets.dart';
+import 'paper_entry_screen.dart';
 
 /// The supervisor's working screen for one site, shift and day:
 /// one card per deployed machine with ONE obvious next action, and a submit bar.
@@ -30,6 +31,13 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
   bool _loading = false;
   Timer? _tick;
 
+  /// Only the answer of the latest request is shown (switching days quickly must not show an older day).
+  int _seq = 0;
+
+  /// Live state shown only (null = all), set by tapping the summary.
+  String? _filter;
+  final _search = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -43,18 +51,53 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
   @override
   void dispose() {
     _tick?.cancel();
+    _search.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
+    final seq = ++_seq;
+    final date = _date;
     setState(() => _loading = true);
     try {
-      final d = await Api.I.getObj('/equipment/attendance/site/${widget.siteId}', query: {'date': _date, 'shift': widget.shift});
-      if (mounted) setState(() { _d = d; _error = null; });
+      final d = await Api.I.getObj('/equipment/attendance/site/${widget.siteId}', query: {'date': date, 'shift': widget.shift});
+      if (mounted && seq == _seq) setState(() { _d = d; _error = null; });
     } catch (e) {
-      if (mounted) setState(() => _error = e);
+      if (mounted && seq == _seq) setState(() => _error = e);
     }
-    if (mounted) setState(() => _loading = false);
+    if (mounted && seq == _seq) setState(() => _loading = false);
+  }
+
+  /// Opens another day: the old day's cards are removed at once so no action is taken on them by mistake.
+  void _goTo(String date) {
+    if (date == _date) return;
+    setState(() {
+      _date = date;
+      _d = null;
+      _error = null;
+      _filter = null;
+    });
+    _load();
+  }
+
+  Future<void> _openPaperEntry() async {
+    final d = _d;
+    if (d == null) return;
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PaperEntryScreen(
+          siteId: widget.siteId,
+          shift: widget.shift,
+          date: _date,
+          day: d,
+          siteLabel: '${d.obj('site').str('site_code')}  ${d.obj('site').str('site_name')}',
+        ),
+      ),
+    );
+    // rows may be saved even when the screen is left with some still failing: always reload
+    if (mounted) _load();
+    if (saved == true && mounted) showSnack(context, 'Paper sheet saved.');
   }
 
   Future<void> _after(Future<bool?> action) async {
@@ -100,15 +143,34 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
 
   Future<void> _pickDate() async {
     final d = await pickDate(context, initial: _date, last: Fmt.today());
-    if (d == null) return;
-    setState(() { _date = d; _d = null; });
-    _load();
+    if (d != null) _goTo(d);
+  }
+
+  /// The machines to show: filtered by state and search, then grouped by vendor (vendors A-Z, the board's order inside).
+  List<(String, List<Json>)> _groups(List<Json> machines) {
+    final q = _search.text.trim().toLowerCase();
+    final shown = machines.where((m) {
+      if (_filter != null && m.str('live_state') != _filter) return false;
+      if (q.isEmpty) return true;
+      return [m.str('equipment_code'), m.str('plate_number'), m.str('type_name'), m.str('vendor_name')].any((x) => x.toLowerCase().contains(q));
+    });
+    final byVendor = <String, List<Json>>{};
+    for (final m in shown) {
+      byVendor.putIfAbsent(m.str('vendor_name', 'Other'), () => []).add(m);
+    }
+    final names = byVendor.keys.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return [for (final n in names) (n, byVendor[n]!)];
   }
 
   @override
   Widget build(BuildContext context) {
     final d = _d;
     final isToday = _date == Fmt.today();
+    final machines = d?.list('machines') ?? const <Json>[];
+    final groups = _groups(machines);
+    final canEdit = d != null && (d.obj('access').isEmpty || d.obj('access').flag('can_edit'));
+    // a finished day still missing machines is entered from the paper sheet in one screen
+    final paperRows = canEdit && !isLiveDay(_date, shift: widget.shift) ? machines.where((m) => m.obj('attendance').isEmpty).length : 0;
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
@@ -119,7 +181,6 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
               style: const TextStyle(fontSize: 12, color: AppColors.muted)),
         ]),
         actions: [
-          IconButton(tooltip: 'Change day', onPressed: _pickDate, icon: const Icon(Icons.calendar_month_rounded)),
           PopupMenuButton<String>(
             onSelected: (v) {
               if (v == 'pdf') {
@@ -129,11 +190,13 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
                     load: () => Api.I.getBytes('/equipment/reports/daily.pdf', query: {'date': _date, 'site_id': widget.siteId}));
               }
               if (v == 'refresh') _load();
+              if (v == 'paper') _openPaperEntry();
               if (v == 'recall') _recallDay();
               if (v == 'requests') Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const MyChangeRequestsScreen()));
             },
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'refresh', child: ListTile(leading: Icon(Icons.refresh_rounded), title: Text('Refresh'))),
+              if (paperRows > 0) const PopupMenuItem(value: 'paper', child: ListTile(leading: Icon(Icons.table_rows_rounded), title: Text('Fill from the paper sheet'))),
               const PopupMenuItem(value: 'pdf', child: ListTile(leading: Icon(Icons.picture_as_pdf_rounded), title: Text('Daily report PDF'))),
               const PopupMenuItem(value: 'requests', child: ListTile(leading: Icon(Icons.forward_to_inbox_rounded), title: Text('My change requests'))),
               if ((d?.obj('submit').intv('submitted_rows') ?? 0) > 0)
@@ -159,40 +222,90 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 900),
                           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                            if (!isToday)
-                              Container(
-                                margin: const EdgeInsets.only(bottom: 10),
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                decoration: BoxDecoration(color: AppColors.standby.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
-                                child: Row(children: [
-                                  const Icon(Icons.history_rounded, color: AppColors.standby),
-                                  const SizedBox(width: 10),
-                                  Expanded(child: Text('You are recording ${Fmt.dayLabel(_date)}, not today.', style: const TextStyle(fontWeight: FontWeight.w600))),
-                                  TextButton(
-                                    onPressed: () {
-                                      setState(() => _date = Fmt.today());
-                                      _load();
-                                    },
-                                    child: const Text('Go to today'),
-                                  ),
-                                ]),
-                              ),
+                            _DayNavigator(
+                              date: _date,
+                              shift: widget.shift,
+                              onPrev: () => _goTo(addDaysTo(_date, -1)),
+                              onNext: isToday ? null : () => _goTo(addDaysTo(_date, 1)),
+                              onPick: _pickDate,
+                              onToday: isToday ? null : () => _goTo(Fmt.today()),
+                            ),
+                            const SizedBox(height: 10),
                             if (!d.obj('access').flag('can_edit') && d.obj('access').isNotEmpty) _ReadOnlyBanner(reason: d.obj('access').str('reason')),
-                            _SummaryStrip(summary: d.obj('summary')),
-                            const SizedBox(height: 12),
-                            if (d.list('machines').isEmpty)
-                              const Card(child: EmptyView(text: 'No machine is deployed on this site and shift for this day.', icon: Icons.precision_manufacturing_rounded))
-                            else
-                              for (final m in d.list('machines'))
-                                _MachineCard(
-                                  m: m,
-                                  date: _date,
-                                  access: d.obj('access'),
-                                  onAction: (fut) => _after(fut),
-                                  siteId: widget.siteId,
-                                  shift: widget.shift,
-                                  onChanged: _load,
+                            if (paperRows > 0)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: SizedBox(
+                                  height: 48,
+                                  child: FilledButton.tonalIcon(
+                                    onPressed: _openPaperEntry,
+                                    icon: const Icon(Icons.table_rows_rounded),
+                                    label: Text('Fill from the paper sheet  ·  $paperRows machine${paperRows == 1 ? '' : 's'}',
+                                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                                  ),
                                 ),
+                              ),
+                            _SummaryStrip(
+                              summary: d.obj('summary'),
+                              selected: _filter,
+                              onSelect: (st) => setState(() => _filter = _filter == st ? null : st),
+                            ),
+                            if (machines.length > 6) ...[
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: _search,
+                                onChanged: (_) => setState(() {}),
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  prefixIcon: const Icon(Icons.search_rounded),
+                                  hintText: 'Search code, plate, type or vendor',
+                                  suffixIcon: _search.text.isEmpty
+                                      ? null
+                                      : IconButton(
+                                          tooltip: 'Clear',
+                                          icon: const Icon(Icons.close_rounded),
+                                          onPressed: () => setState(_search.clear),
+                                        ),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 4),
+                            if (machines.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 8),
+                                child: Card(child: EmptyView(text: 'No machine is deployed on this site and shift for this day.', icon: Icons.precision_manufacturing_rounded)),
+                              )
+                            else if (groups.isEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Card(
+                                  child: EmptyView(
+                                    text: 'No machine matches.',
+                                    icon: Icons.filter_alt_off_rounded,
+                                    action: TextButton(
+                                      onPressed: () => setState(() {
+                                        _filter = null;
+                                        _search.clear();
+                                      }),
+                                      child: const Text('Show all'),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            else
+                              for (final g in groups) ...[
+                                VendorHeader(name: g.$1, count: g.$2.length),
+                                for (final m in g.$2)
+                                  _MachineCard(
+                                    m: m,
+                                    date: _date,
+                                    access: d.obj('access'),
+                                    onAction: (fut) => _after(fut),
+                                    siteId: widget.siteId,
+                                    shift: widget.shift,
+                                    onChanged: _load,
+                                  ),
+                              ],
                           ]),
                         ),
                       ),
@@ -221,29 +334,94 @@ class _ReadOnlyBanner extends StatelessWidget {
   }
 }
 
+/// Previous / next day around the date, with a clear "not today" state and a way back to today.
+class _DayNavigator extends StatelessWidget {
+  const _DayNavigator({required this.date, required this.shift, required this.onPrev, required this.onNext, required this.onPick, required this.onToday});
+  final String date;
+  final String shift;
+  final VoidCallback onPrev;
+  final VoidCallback? onNext;
+  final VoidCallback onPick;
+  final VoidCallback? onToday;
+
+  @override
+  Widget build(BuildContext context) {
+    final past = onToday != null;
+    final color = past ? AppColors.standby : AppColors.navy;
+    return Container(
+      decoration: BoxDecoration(
+        color: past ? AppColors.standby.withValues(alpha: 0.10) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: past ? AppColors.standby.withValues(alpha: 0.35) : AppColors.line),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      child: Row(children: [
+        IconButton(tooltip: 'Previous day', onPressed: onPrev, icon: const Icon(Icons.chevron_left_rounded, size: 28)),
+        Expanded(
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: onPick,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Column(children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.calendar_month_rounded, size: 18, color: color),
+                  const SizedBox(width: 6),
+                  Text(Fmt.dayLabel(date), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: color)),
+                ]),
+                Text(
+                  past ? 'Not today · recording a past day' : (shift == 'Night' ? 'Tonight' : 'Today'),
+                  style: TextStyle(fontSize: 12, color: past ? AppColors.standby : AppColors.muted, fontWeight: past ? FontWeight.w600 : FontWeight.w400),
+                ),
+              ]),
+            ),
+          ),
+        ),
+        if (onToday != null) TextButton(onPressed: onToday, child: const Text('Today')),
+        IconButton(tooltip: 'Next day', onPressed: onNext, icon: const Icon(Icons.chevron_right_rounded, size: 28)),
+      ]),
+    );
+  }
+}
+
+/// Counts per state; tapping one shows only those machines (tap again for all).
 class _SummaryStrip extends StatelessWidget {
-  const _SummaryStrip({required this.summary});
+  const _SummaryStrip({required this.summary, required this.selected, required this.onSelect});
   final Json summary;
+  final String? selected;
+  final ValueChanged<String> onSelect;
 
   @override
   Widget build(BuildContext context) {
     Widget chip(String state, String key) {
       final s = StateStyle.of(state);
       final n = summary.intv(key);
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: n == 0 ? Colors.white : s.color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: n == 0 ? AppColors.line : s.color.withValues(alpha: 0.4)),
+      final on = selected == state;
+      final dim = selected != null && !on;
+      return Opacity(
+        opacity: dim ? 0.5 : 1,
+        child: Material(
+          color: on ? s.color.withValues(alpha: 0.18) : (n == 0 ? Colors.white : s.color.withValues(alpha: 0.1)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: on ? s.color : (n == 0 ? AppColors.line : s.color.withValues(alpha: 0.4)), width: on ? 1.6 : 1),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: n == 0 && !on ? null : () => onSelect(state),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(s.icon, size: 18, color: n == 0 ? AppColors.neutral : s.color),
+                const SizedBox(width: 6),
+                Text('$n', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: n == 0 ? AppColors.muted : s.color)),
+                const SizedBox(width: 4),
+                Text(s.label, style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
+                if (on) ...[const SizedBox(width: 4), Icon(Icons.close_rounded, size: 15, color: s.color)],
+              ]),
+            ),
+          ),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(s.icon, size: 18, color: n == 0 ? AppColors.neutral : s.color),
-          const SizedBox(width: 6),
-          Text('$n', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: n == 0 ? AppColors.muted : s.color)),
-          const SizedBox(width: 4),
-          Text(s.label, style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
-        ]),
       );
     }
 
@@ -252,9 +430,9 @@ class _SummaryStrip extends StatelessWidget {
       child: Row(children: [
         for (final e in const [
           ('Working', 'working'), ('OnBreak', 'on_break'), ('Breakdown', 'breakdown'), ('Standby', 'standby'),
-          ('NotArrived', 'not_arrived'), ('Finished', 'finished'), ('Absent', 'absent'),
+          ('NotArrived', 'not_arrived'), ('Finished', 'finished'), ('Absent', 'absent'), ('Holiday', 'holiday'),
         ])
-          Padding(padding: const EdgeInsets.only(right: 8), child: chip(e.$1, e.$2)),
+          if (e.$1 != 'Holiday' || summary.intv(e.$2) > 0) Padding(padding: const EdgeInsets.only(right: 8), child: chip(e.$1, e.$2)),
       ]),
     );
   }
@@ -350,12 +528,9 @@ class _MachineCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Flexible(child: Text(m.str('type_name'), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.muted))),
                   ]),
-                  Text(
-                    [m.str('vendor_name'), if (m.strOrNull('plate_number') != null) m.str('plate_number')].join('  ·  '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: AppColors.muted, fontSize: 12.5),
-                  ),
+                  // the vendor is the group header above the card
+                  if (m.strOrNull('plate_number') != null)
+                    Text(m.str('plate_number'), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
                 ]),
               ),
               Column(crossAxisAlignment: CrossAxisAlignment.end, children: [

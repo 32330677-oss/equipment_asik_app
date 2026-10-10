@@ -9,6 +9,7 @@ import '../screens/admin/settings_screen.dart';
 import '../screens/admin/sites_screen.dart';
 import '../screens/admin/users_screen.dart';
 import '../screens/equipment/attendance_review_screen.dart';
+import '../screens/equipment/client_report_screen.dart';
 import '../screens/equipment/delivery_notes_screen.dart';
 import '../screens/equipment/fuel_adjustments_screen.dart';
 import '../screens/equipment/live_board_screen.dart';
@@ -41,6 +42,7 @@ class _AppShellState extends State<AppShell> {
       _NavItem('Live board', Icons.dashboard_rounded, () => const LiveBoardScreen(), section: 'Operations'),
       _NavItem('Attendance review', Icons.fact_check_rounded, () => const AttendanceReviewScreen()),
       _NavItem('Paper sheets', Icons.description_rounded, () => const TimesheetsScreen()),
+      _NavItem('Daily report (client)', Icons.assignment_turned_in_rounded, () => const ClientReportScreen()),
       _NavItem('Invoice', Icons.payments_rounded, () => const PayrollScreen(), section: 'Money'),
       _NavItem('Fuel & adjustments', Icons.local_gas_station_rounded, () => const FuelAdjustmentsScreen()),
       _NavItem('Delivery notes (DNR)', Icons.local_shipping_rounded, () => const DeliveryNotesScreen()),

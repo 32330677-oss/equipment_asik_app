@@ -7,6 +7,7 @@ import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/pdf_view.dart';
+import '../equipment/client_report_screen.dart';
 import '../../widgets/ui.dart';
 import 'action_sheets.dart';
 import 'paper_entry_screen.dart';
@@ -189,6 +190,12 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
                     fileName: 'daily-${widget.siteId}-$_date.pdf',
                     load: () => Api.I.getBytes('/equipment/reports/daily.pdf', query: {'date': _date, 'site_id': widget.siteId}));
               }
+              if (v == 'client') {
+                ClientReportScreen.open(context,
+                    siteId: widget.siteId,
+                    siteLabel: d == null ? widget.title : '${d.obj('site').str('site_code')}  ${d.obj('site').str('site_name')}',
+                    shift: widget.shift);
+              }
               if (v == 'refresh') _load();
               if (v == 'paper') _openPaperEntry();
               if (v == 'recall') _recallDay();
@@ -198,6 +205,7 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
               const PopupMenuItem(value: 'refresh', child: ListTile(leading: Icon(Icons.refresh_rounded), title: Text('Refresh'))),
               if (paperRows > 0) const PopupMenuItem(value: 'paper', child: ListTile(leading: Icon(Icons.table_rows_rounded), title: Text('Fill from the paper sheet'))),
               const PopupMenuItem(value: 'pdf', child: ListTile(leading: Icon(Icons.picture_as_pdf_rounded), title: Text('Daily report PDF'))),
+              const PopupMenuItem(value: 'client', child: ListTile(leading: Icon(Icons.assignment_turned_in_rounded), title: Text('Report for the client'))),
               const PopupMenuItem(value: 'requests', child: ListTile(leading: Icon(Icons.forward_to_inbox_rounded), title: Text('My change requests'))),
               if ((d?.obj('submit').intv('submitted_rows') ?? 0) > 0)
                 PopupMenuItem(

@@ -182,7 +182,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
                 cells: [
                   DataCell(Text(Fmt.dayLabel(r.str('record_date'))), onTap: () => _open(r)),
                   DataCell(Text('${r.str('site_code')} ${r.str('shift_type') == 'Night' ? '(N)' : ''}'), onTap: () => _open(r)),
-                  DataCell(Text('${r.str('equipment_code')}  ${r.str('type_name')}', style: const TextStyle(fontWeight: FontWeight.w700)), onTap: () => _open(r)),
+                  DataCell(Text('${r.str('equipment_code')}  ${r.machineType}', style: const TextStyle(fontWeight: FontWeight.w700)), onTap: () => _open(r)),
                   DataCell(
                       Row(mainAxisSize: MainAxisSize.min, children: [
                         WorkflowPill(r.str('status')),

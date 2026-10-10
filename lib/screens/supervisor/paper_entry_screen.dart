@@ -434,7 +434,7 @@ class _PaperEntryScreenState extends State<PaperEntryScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  [r.m.str('type_name'), if (r.m.strOrNull('plate_number') != null) r.m.str('plate_number')].join('  ·  '),
+                  [r.m.machineType, if (r.m.strOrNull('plate_number') != null) r.m.str('plate_number')].join('  ·  '),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: AppColors.muted, fontSize: 13),

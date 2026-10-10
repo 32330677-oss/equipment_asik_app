@@ -29,7 +29,7 @@ class DeliveryNotesScreen extends StatefulWidget {
         context,
         MaterialPageRoute(
           builder: (_) => Scaffold(
-            appBar: AppBar(title: Text('Delivery notes (DNR) - ${machine.str('equipment_code')}')),
+            appBar: AppBar(title: Text('Delivery notes (DNR) - ${machine.machineName}')),
             body: DeliveryNotesScreen(machine: machine),
           ),
         ),
@@ -56,7 +56,7 @@ class _DeliveryNotesScreenState extends State<DeliveryNotesScreen> {
     _from = Fmt.dateOf(DateTime(n.year, n.month - 1, 1));
     _to = Fmt.today();
     final m = widget.machine;
-    if (m != null) _machine = PickOption(m.intv('equipment_id'), m.str('equipment_code'));
+    if (m != null) _machine = PickOption(m.intv('equipment_id'), m.machineName);
     _load();
   }
 
@@ -105,7 +105,7 @@ class _DeliveryNotesScreenState extends State<DeliveryNotesScreen> {
       onRefresh: _load,
       children: [
         PageHeader(
-          title: widget.machine == null ? 'Delivery notes (DNR)' : 'Delivery notes of ${widget.machine!.str('equipment_code')}',
+          title: widget.machine == null ? 'Delivery notes (DNR)' : 'Delivery notes of ${widget.machine!.machineName}',
           subtitle: 'Paid per unit (trip, ton, m³...) at the DNR price of the vendor. Each note is paid once, in the payroll of its date.',
           actions: [
             DateField(label: 'From', value: _from, width: 150, onChanged: (v) { _from = v ?? _from; _load(); }),
@@ -156,7 +156,7 @@ class _DeliveryNotesScreenState extends State<DeliveryNotesScreen> {
                 DataRow(cells: [
                   DataCell(Text(r.str('dn_number'), style: TextStyle(fontWeight: FontWeight.w800, decoration: r.str('status') == 'Cancelled' ? TextDecoration.lineThrough : null))),
                   DataCell(Text(Fmt.date(r.str('note_date')))),
-                  DataCell(Text(r.str('equipment_code'))),
+                  DataCell(Text(r.machineName)),
                   DataCell(Text(r.str('vendor_name'))),
                   DataCell(Text(r.str('site_code'))),
                   DataCell(ConstrainedBox(
@@ -197,10 +197,10 @@ Future<Json?> showDeliveryNoteDialog(BuildContext context, {Json? note, Json? ma
   final editing = note != null;
   final Json n = note ?? <String, dynamic>{};
   PickOption? m = editing
-      ? PickOption(n.intv('equipment_id'), n.str('equipment_code'))
+      ? PickOption(n.intv('equipment_id'), n.machineName)
       : machine == null
           ? null
-          : PickOption(machine.intv('equipment_id'), machine.str('equipment_code'));
+          : PickOption(machine.intv('equipment_id'), machine.machineName);
   PickOption? site = editing ? PickOption(n.intv('site_id'), n.str('site_code')) : null;
   var date = editing ? n.str('note_date') : Fmt.today();
   Json? price = editing ? {'dnr_rate_id': n.intv('dnr_rate_id'), 'item_name': n.str('item_name'), 'unit': n.str('unit'), 'unit_price': n.str('unit_price'), 'currency': n.str('currency')} : null;

@@ -300,7 +300,7 @@ class _RejectedRowsScreenState extends State<RejectedRowsScreen> {
                             padding: const EdgeInsets.all(14),
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                               Row(children: [
-                                Expanded(child: Text('${r.str('equipment_code')} · ${r.str('site_code')}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
+                                Expanded(child: Text('${r.machineName} · ${r.str('site_code')}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
                                 Text(Fmt.dayLabel(r.str('record_date')), style: const TextStyle(color: AppColors.muted)),
                               ]),
                               const SizedBox(height: 6),

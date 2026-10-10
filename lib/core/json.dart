@@ -8,6 +8,15 @@ List<Json> asJsonList(dynamic v) =>
     v is List ? v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList() : <Json>[];
 
 extension JsonRead on Map<String, dynamic> {
+  /// 016: the machine's type with its fixed number inside its vendor, e.g. "Excavator #3" (the plain type before a number exists).
+  String get machineType => strOrNull('machine_label') ?? str('type_name');
+
+  /// 016: "EQ-0012 · Excavator #3" (just the code when the machine has no number yet).
+  String get machineName {
+    final label = strOrNull('machine_label');
+    return label == null ? str('equipment_code') : '${str('equipment_code')} · $label';
+  }
+
   String str(String key, [String fallback = '']) {
     final v = this[key];
     return v == null ? fallback : v.toString();

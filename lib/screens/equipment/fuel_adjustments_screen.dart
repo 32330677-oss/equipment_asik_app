@@ -79,7 +79,7 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
 
   Future<void> _price(Json r) async {
     final priced = r.strOrNull('price_per_liter') != null;
-    final v = await promptText(context, 'Price per litre - ${r.str('equipment_code')} ${Fmt.date(r.str('issue_date'))}',
+    final v = await promptText(context, 'Price per litre - ${r.machineName} ${Fmt.date(r.str('issue_date'))}',
         label: 'Price per litre (${r.str('liters')} L)', initial: r.strOrNull('price_per_liter'), maxLines: 1, confirm: 'Save price');
     if (v == null) return;
     final n = num.tryParse(v);
@@ -98,7 +98,7 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
 
   /// Litres written wrong on the issue (before its period is closed): reason required, kept in the history.
   Future<void> _liters(Json r) async {
-    final v = await promptText(context, 'Litres - ${r.str('equipment_code')} ${Fmt.date(r.str('issue_date'))}',
+    final v = await promptText(context, 'Litres - ${r.machineName} ${Fmt.date(r.str('issue_date'))}',
         label: 'Litres (from the receipt)', initial: r.str('liters'), maxLines: 1, confirm: 'Next');
     if (v == null) return;
     final n = num.tryParse(v.replaceAll(',', '.'));
@@ -138,7 +138,7 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
         await Api.I.patch('/equipment/fuel-issues/${r.intv('fuel_issue_id')}', {'price_per_liter': n});
         ok++;
       } catch (e) {
-        errors.add('${r.str('equipment_code')}: ${e is ApiException ? e.message : e}');
+        errors.add('${r.machineName}: ${e is ApiException ? e.message : e}');
       }
     }
     if (mounted) showSnack(context, '$ok priced${errors.isEmpty ? '.' : ', ${errors.length} failed: ${errors.first}'}', error: errors.isNotEmpty);
@@ -262,7 +262,7 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
                 color: r.flag('is_cancelled') ? WidgetStatePropertyAll(Colors.grey.shade100) : null,
                 cells: [
                   DataCell(Text(Fmt.dayLabel(r.str('issue_date')))),
-                  DataCell(Text(r.str('equipment_code'), style: const TextStyle(fontWeight: FontWeight.w700))),
+                  DataCell(Text(r.machineName, style: const TextStyle(fontWeight: FontWeight.w700))),
                   DataCell(Text(r.str('site_code'))),
                   DataCell(Text(r.str('vendor_name'))),
                   DataCell(Text(Fmt.num2(r.dblOrNull('liters')))),
@@ -403,7 +403,7 @@ class _AdjustmentsTabState extends State<_AdjustmentsTab> with AutomaticKeepAliv
             for (final r in rows)
               DataRow(cells: [
                 DataCell(Text(Fmt.dayLabel(r.str('adjustment_date')))),
-                DataCell(Text(r.str('equipment_code'), style: const TextStyle(fontWeight: FontWeight.w700))),
+                DataCell(Text(r.machineName, style: const TextStyle(fontWeight: FontWeight.w700))),
                 DataCell(Text(r.str('vendor_name'))),
                 DataCell(Text(r.str('site_code', 'any'))),
                 DataCell(Text(r.str('adjustment_type'))),
@@ -682,8 +682,8 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
             Expanded(
               child: Text(
                   target == 'attendance'
-                      ? '#${_id(c)} · ${c.str('equipment_code')} · ${c.str('site_code')} · ${Fmt.dayLabel(c.str('record_date'))}'
-                      : '#${_id(c)} · ${c.str('equipment_code')} · ${const {'fuel_issue': 'Fuel issue', 'rate_card': 'Rate card', 'fuel_price': 'Fuel price', 'fuel_terms': 'Fuel terms', 'adjustment': 'Adjustment', 'deployment': 'Deployment'}[target] ?? 'Other amount'}${c.strOrNull('target_id') == null ? '' : ' #${c.str('target_id')}'}',
+                      ? '#${_id(c)} · ${c.machineName} · ${c.str('site_code')} · ${Fmt.dayLabel(c.str('record_date'))}'
+                      : '#${_id(c)} · ${c.machineName} · ${const {'fuel_issue': 'Fuel issue', 'rate_card': 'Rate card', 'fuel_price': 'Fuel price', 'fuel_terms': 'Fuel terms', 'adjustment': 'Adjustment', 'deployment': 'Deployment'}[target] ?? 'Other amount'}${c.strOrNull('target_id') == null ? '' : ' #${c.str('target_id')}'}',
                   style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
             ),
             if (c.strOrNull('locked_batch_id') != null) ...[Pill('Batch #${c.str('locked_batch_id')}', color: AppColors.info), const SizedBox(width: 6)],

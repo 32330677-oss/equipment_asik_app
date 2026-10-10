@@ -340,7 +340,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
     final test = _dnr ? _dnrHelpCard() : _testCard();
     return Scaffold(
       appBar: AppBar(
-        title: Text('${_revising ? 'Change prices from a date' : _editing ? 'Correct rate card' : _dnr ? 'New DNR prices' : 'New rate card'} - ${m.str('equipment_code')}'),
+        title: Text('${_revising ? 'Change prices from a date' : _editing ? 'Correct rate card' : _dnr ? 'New DNR prices' : 'New rate card'} - ${m.machineName}'),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -485,7 +485,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
           contentPadding: EdgeInsets.zero,
           value: _dnrAllMachines,
           onChanged: (v) => setState(() => _dnrAllMachines = v),
-          title: Text(_dnrAllMachines ? 'For every machine of ${widget.machine.str('vendor_name')}' : 'For this machine only (${widget.machine.str('equipment_code')})'),
+          title: Text(_dnrAllMachines ? 'For every machine of ${widget.machine.str('vendor_name')}' : 'For this machine only (${widget.machine.machineName})'),
           subtitle: const Text('A price for every machine of the vendor saves typing it again for each truck.'),
         ),
         const SizedBox(height: 8),

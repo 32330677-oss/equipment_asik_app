@@ -84,7 +84,7 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
             for (final s in sheets)
               DataRow(onSelectChanged: (_) => _open(s), cells: [
                 DataCell(Text(s.str('sheet_code'), style: const TextStyle(fontWeight: FontWeight.w700))),
-                DataCell(Text('${s.str('equipment_code')}  ${s.str('type_name')}')),
+                DataCell(Text('${s.str('equipment_code')}  ${s.machineType}')),
                 DataCell(Text(s.str('site_code'))),
                 DataCell(Text(s.str('vendor_name'))),
                 DataCell(SizedBox(width: 170, child: _Progress(total: s.intv('rows_count'), matched: s.intv('matched'), mismatch: s.intv('mismatch')))),
@@ -390,7 +390,7 @@ class _ReconcileScreenState extends State<ReconcileScreen> {
         padding: const EdgeInsets.all(14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            Text('${s.str('equipment_code')} ${s.str('type_name')}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+            Text('${s.str('equipment_code')} ${s.machineType}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
             Text('${s.str('site_code')} - ${s.str('site_name')}  |  ${s.str('vendor_name')}  |  ${Fmt.monthLabel(s.str('period_month'))}', style: const TextStyle(color: AppColors.muted)),
             Pill(s.str('status'), color: s.str('status') == 'Reconciled' ? AppColors.working : s.str('status') == 'Closed' ? AppColors.info : AppColors.muted),
             if (s.list('cancelled_rows').isNotEmpty || (s['cancelled_rows'] as List?)?.isNotEmpty == true)

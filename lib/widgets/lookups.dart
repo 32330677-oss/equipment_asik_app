@@ -17,7 +17,7 @@ class Lookups {
     final rows = await Api.I.getList('/equipment/machines', query: {'vendor_id': vendorId, 'status': status, 'page_size': 200});
     return [
       for (final r in rows)
-        PickOption(r.intv('equipment_id'), '${r.str('equipment_code')}  ${r.str('type_name')}',
+        PickOption(r.intv('equipment_id'), '${r.str('equipment_code')}  ${r.machineType}',
             [r.str('vendor_name'), if (r.strOrNull('plate_number') != null) r.str('plate_number'), if (r.strOrNull('site_code') != null) 'at ${r.str('site_code')}'].join('  ·  ')),
     ];
   }

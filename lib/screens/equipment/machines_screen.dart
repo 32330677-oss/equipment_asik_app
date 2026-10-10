@@ -131,7 +131,7 @@ class _MachinesScreenState extends State<MachinesScreen> {
               for (final r in rows)
                 DataRow(onSelectChanged: (_) => _open(r), cells: [
                   DataCell(Text(r.str('equipment_code'), style: const TextStyle(fontWeight: FontWeight.w800))),
-                  DataCell(Text(r.str('type_name'))),
+                  DataCell(Text(r.machineType)),
                   DataCell(Text(r.str('vendor_name'))),
                   DataCell(Text([r.str('make'), r.str('model')].where((x) => x.isNotEmpty).join(' '))),
                   DataCell(Text(r.str('plate_number', '-'))),
@@ -434,7 +434,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
     final m = _m;
     return Scaffold(
       appBar: AppBar(
-        title: Text(m == null ? 'Machine' : '${m.str('equipment_code')}  ${m.str('type_name')}'),
+        title: Text(m == null ? 'Machine' : '${m.str('equipment_code')}  ${m.machineType}'),
         actions: [
           if (m != null) ...[
             TextButton.icon(onPressed: _statement, icon: const Icon(Icons.picture_as_pdf_rounded), label: const Text('Statement')),
@@ -502,7 +502,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                 InkWell(onTap: _admin ? _status : null, child: Pill(m.str('status'), color: machineStatusColor(m.str('status')), icon: _admin ? Icons.expand_more_rounded : null)),
               ]),
               const SizedBox(height: 4),
-              Text('${m.str('type_name')}  ·  ${[m.str('make'), m.str('model')].where((x) => x.isNotEmpty).join(' ')}', style: const TextStyle(color: AppColors.muted)),
+              Text('${m.machineType}  ·  ${[m.str('make'), m.str('model')].where((x) => x.isNotEmpty).join(' ')}', style: const TextStyle(color: AppColors.muted)),
               const SizedBox(height: 12),
               InfoRow('Vendor', '${m.str('vendor_name')} (${m.str('vendor_code')})', width: 120),
               InfoRow('Plate / serial', '${m.str('plate_number', '-')}  /  ${m.str('serial_number', '-')}', width: 120),

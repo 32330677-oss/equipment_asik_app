@@ -566,7 +566,7 @@ class _ItemTile extends StatelessWidget {
           title: Row(children: [
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${item.str('equipment_code')}  ${item.str('type_name')}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                Text('${item.str('equipment_code')}  ${item.machineType}', style: const TextStyle(fontWeight: FontWeight.w800)),
                 Text('${item.str('vendor_name')}  ·  ${item.str('site_code')}  ·  ${item.str('billing_mode')}', style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
                 if (item.strOrNull('invoice_no') != null)
                   Padding(
@@ -1078,7 +1078,7 @@ class _BatchScreenState extends State<BatchScreen> {
   /// a fuel issue (litres / price), the rate card price, or another amount. Another Admin or Accountant approves it.
   Future<void> _financialCorrection(Json item) async {
     final fuel = item.list('lines').where((l) => l.str('line_type') == 'Fuel' && l.intOrNull('source_id') != null).toList();
-    final what = await pickFromList(context, 'What was wrong on ${item.str('equipment_code')}?', [
+    final what = await pickFromList(context, 'What was wrong on ${item.machineName}?', [
       for (final l in fuel)
         PickOption(l, 'Fuel issue #${l.str('source_id')}', '${Fmt.num2(l.dblOrNull('quantity'))} L x ${(l.dblOrNull('unit_price') ?? 0).toStringAsFixed(3)}'),
       if (item.intOrNull('rate_card_id') != null) PickOption('rate_card', 'Price of the rate card', 'agreed price / discount not applied'),
@@ -1497,7 +1497,7 @@ class _SnapshotSheetState extends State<_SnapshotSheet> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: Text('${widget.item.str('equipment_code')} at ${widget.item.str('site_code')}: paid rows', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            child: Text('${widget.item.machineName} at ${widget.item.str('site_code')}: paid rows', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
           ),
           Expanded(
             child: _error != null

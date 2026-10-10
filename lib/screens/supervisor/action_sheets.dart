@@ -312,8 +312,8 @@ Future<bool?> checkInSheet(BuildContext context,
   final hasMeter = machine.str('meter_unit', 'Hours') != 'None';
   return showActionSheet(
     context,
-    title: 'Check in ${machine.str('equipment_code')}',
-    subtitle: '${machine.str('type_name')} · ${machine.str('vendor_name')}',
+    title: 'Check in ${machine.machineName}',
+    subtitle: '${machine.machineType} · ${machine.str('vendor_name')}',
     icon: Icons.login_rounded,
     color: AppColors.working,
     submitLabel: past ? 'Save' : 'Start work',
@@ -479,8 +479,8 @@ Future<bool?> downtimeSheet(BuildContext context, {required Json att, required S
         ? ({'Break': 'Add a break / lunch', 'Refuel': 'Add a refuelling stop', 'Breakdown': 'Add a breakdown', 'Standby': 'Add a standby period'}[type] ?? type)
         : ({'Break': 'Start a break', 'Refuel': 'Refuelling', 'Breakdown': 'Report a breakdown', 'Standby': 'Machine on standby'}[type] ?? type),
     subtitle: closed
-        ? '${att.str('equipment_code')} · session ${Fmt.time(checkIn)} - ${Fmt.time(checkOut)}'
-        : '${att.str('equipment_code')} · the clock stops until you resume',
+        ? '${att.machineName} · session ${Fmt.time(checkIn)} - ${Fmt.time(checkOut)}'
+        : '${att.machineName} · the clock stops until you resume',
     icon: type == 'Refuel' ? Icons.local_gas_station_rounded : style.icon,
     color: style.color,
     submitLabel: 'Save',
@@ -538,7 +538,7 @@ Future<bool?> endDowntimeSheet(BuildContext context, {required Json att, require
   return showActionSheet(
     context,
     title: 'Resume work',
-    subtitle: '${att.str('equipment_code')} · $type since ${Fmt.time(p.str('start_time'))}',
+    subtitle: '${att.machineName} · $type since ${Fmt.time(p.str('start_time'))}',
     icon: Icons.play_arrow_rounded,
     color: AppColors.working,
     submitLabel: 'Back to work',
@@ -567,7 +567,7 @@ Future<bool?> checkOutSheet(BuildContext context, {required Json machine, requir
   final meterStart = att.dblOrNull('meter_start');
   return showActionSheet(
     context,
-    title: 'Check out ${att.str('equipment_code')}',
+    title: 'Check out ${att.machineName}',
     subtitle: 'Started ${Fmt.dayLabel(recordDate)} at ${Fmt.time(att.str('check_in_time'))}',
     icon: Icons.logout_rounded,
     color: AppColors.navy,
@@ -623,7 +623,7 @@ Future<bool?> dayStatusSheet(BuildContext context,
 
   return showActionSheet(
     context,
-    title: 'Whole day for ${machine.str('equipment_code')}',
+    title: 'Whole day for ${machine.machineName}',
     subtitle: 'Use when the machine did not work at all on ${Fmt.dayLabel(date)}',
     icon: Icons.event_busy_rounded,
     color: StateStyle.of(status).color,
@@ -716,7 +716,7 @@ Future<bool?> editRowSheet(BuildContext context, {required Json att, int? vendor
   final shift = att.str('shift_type', 'Day');
   return showActionSheet(
     context,
-    title: 'Edit ${att.str('equipment_code')} · ${Fmt.dayLabel(date)}',
+    title: 'Edit ${att.machineName} · ${Fmt.dayLabel(date)}',
     subtitle: 'Sheet row #${att.obj('sheet').str('sheet_row_no')}',
     icon: Icons.edit_rounded,
     color: AppColors.navy,
@@ -783,7 +783,7 @@ Future<bool?> downtimeEditSheet(BuildContext context, {required Json att, requir
   return showActionSheet(
     context,
     title: 'Correct this pause',
-    subtitle: '${att.str('equipment_code')} · ${Fmt.dayLabel(date)}',
+    subtitle: '${att.machineName} · ${Fmt.dayLabel(date)}',
     icon: Icons.edit_calendar_rounded,
     color: AppColors.navy,
     submitLabel: 'Save',
@@ -858,7 +858,7 @@ Future<bool?> changeRequestSheet(BuildContext context, {required Json att}) {
   return showActionSheet(
     context,
     title: 'Ask the office to change this row',
-    subtitle: '${att.str('equipment_code')} · ${Fmt.dayLabel(date)} · row #${att.obj('sheet').str('sheet_row_no')}',
+    subtitle: '${att.machineName} · ${Fmt.dayLabel(date)} · row #${att.obj('sheet').str('sheet_row_no')}',
     icon: Icons.forward_to_inbox_rounded,
     color: AppColors.navy,
     submitLabel: 'Send the request',

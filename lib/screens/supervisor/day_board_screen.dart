@@ -152,7 +152,7 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
     final shown = machines.where((m) {
       if (_filter != null && m.str('live_state') != _filter) return false;
       if (q.isEmpty) return true;
-      return [m.str('equipment_code'), m.str('plate_number'), m.str('type_name'), m.str('vendor_name')].any((x) => x.toLowerCase().contains(q));
+      return [m.str('equipment_code'), m.str('plate_number'), m.str('type_name'), m.str('machine_label'), m.str('vendor_name')].any((x) => x.toLowerCase().contains(q));
     });
     final byVendor = <String, List<Json>>{};
     for (final m in shown) {
@@ -526,10 +526,14 @@ class _MachineCard extends StatelessWidget {
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  // 016: the machine's own number inside its vendor + type ("Excavator #3") is the big title, so two
+                  // machines of the same type and vendor are not confused; the internal code stays next to it.
                   Row(children: [
-                    Text(m.str('equipment_code'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.ink)),
+                    Flexible(
+                        child: Text(m.machineType, maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.ink))),
                     const SizedBox(width: 8),
-                    Flexible(child: Text(m.str('type_name'), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.muted))),
+                    Text(m.str('equipment_code'), style: const TextStyle(color: AppColors.muted, fontWeight: FontWeight.w600)),
                   ]),
                   // the vendor is the group header above the card
                   if (m.strOrNull('plate_number') != null)

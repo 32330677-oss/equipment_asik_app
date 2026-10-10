@@ -498,7 +498,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
           DateField(label: 'Balance date *', value: asOf, onChanged: (x) => set(() => asOf = x ?? asOf)),
           Dropdown<int?>(label: 'Machine (optional)', value: machine, width: null, items: [
             const DropdownMenuItem(value: null, child: Text('Whole vendor')),
-            for (final m in machines) DropdownMenuItem(value: m.intv('equipment_id'), child: Text('${m.str('equipment_code')}  ${m.str('type_name')}')),
+            for (final m in machines) DropdownMenuItem(value: m.intv('equipment_id'), child: Text('${m.str('equipment_code')}  ${m.machineType}')),
           ], onChanged: (x) => set(() => machine = x)),
           DateField(label: 'Old period from', value: from, clearable: true, onChanged: (x) => set(() => from = x)),
           DateField(label: 'Old period to', value: to, clearable: true, onChanged: (x) => set(() => to = x)),
@@ -609,7 +609,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
               for (final m in machines)
                 ActionChip(
                   avatar: Icon(Icons.precision_manufacturing_rounded, size: 18, color: machineStatusColor(m.str('status'))),
-                  label: Text('${m.str('equipment_code')}  ${m.str('type_name')}${m.strOrNull('plate_number') == null ? '' : '  ·  ${m.str('plate_number')}'}'),
+                  label: Text('${m.str('equipment_code')}  ${m.machineType}${m.strOrNull('plate_number') == null ? '' : '  ·  ${m.str('plate_number')}'}'),
                   onPressed: () async {
                     await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => MachineDetailScreen(id: m.intv('equipment_id'))));
                     _load();

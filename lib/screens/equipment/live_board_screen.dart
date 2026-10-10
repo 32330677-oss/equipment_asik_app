@@ -67,7 +67,7 @@ class _LiveBoardScreenState extends State<LiveBoardScreen> {
     var machines = d.list('machines');
     if (_problemsOnly) machines = machines.where(_isProblem).toList();
     if (_q.isNotEmpty) {
-      machines = machines.where((m) => '${m.str('equipment_code')} ${m.str('type_name')} ${m.str('vendor_name')} ${m.str('operator_name')}'.toLowerCase().contains(_q)).toList();
+      machines = machines.where((m) => '${m.str('equipment_code')} ${m.str('type_name')} ${m.str('machine_label')} ${m.str('vendor_name')} ${m.str('operator_name')}'.toLowerCase().contains(_q)).toList();
     }
     final groups = <String, List<Json>>{};
     for (final m in machines) {
@@ -246,7 +246,7 @@ class _MachineRow extends StatelessWidget {
               Row(children: [
                 Text(m.str('equipment_code'), style: const TextStyle(fontWeight: FontWeight.w800)),
                 const SizedBox(width: 6),
-                Flexible(child: Text(m.str('type_name'), style: const TextStyle(color: AppColors.muted), overflow: TextOverflow.ellipsis)),
+                Flexible(child: Text(m.machineType, style: const TextStyle(color: AppColors.muted), overflow: TextOverflow.ellipsis)),
               ]),
               Text(sub.join('  |  '), style: const TextStyle(color: AppColors.muted, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
             ]),
@@ -272,7 +272,7 @@ class _MachineRow extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Row(children: [
-              Expanded(child: Text('${m.str('equipment_code')}  ${m.str('type_name')}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
+              Expanded(child: Text('${m.str('equipment_code')}  ${m.machineType}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
               StatePill(m.str('live_state')),
             ]),
             const SizedBox(height: 10),

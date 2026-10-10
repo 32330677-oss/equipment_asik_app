@@ -423,10 +423,17 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
     if (from == null || !mounted) return;
     final to = await pickDate(context, initial: Fmt.today());
     if (to == null || !mounted) return;
+    // the office may want the amounts before approving: Submitted days can be counted too (marked * on the PDF)
+    final which = await pickFromList(context, 'Which days?', [
+      PickOption(false, 'Approved days only', 'What the invoice will contain'),
+      PickOption(true, 'Include days not approved yet', 'Submitted by the supervisor, waiting for approval: marked * on the PDF'),
+    ]);
+    if (which == null || !mounted) return;
+    final withUnapproved = which.value == true;
     PdfViewScreen.open(context,
-        title: 'Statement ${_m!.str('equipment_code')}',
-        fileName: 'statement-${_m!.str('equipment_code')}-$from-$to.pdf',
-        load: () => Api.I.getBytes('/equipment/statements/machine/${widget.id}.pdf', query: {'from': from, 'to': to}));
+        title: 'Statement ${_m!.str('equipment_code')}${withUnapproved ? ' (incl. not approved)' : ''}',
+        fileName: 'statement-${_m!.str('equipment_code')}-$from-$to${withUnapproved ? '-not-approved' : ''}.pdf',
+        load: () => Api.I.getBytes('/equipment/statements/machine/${widget.id}.pdf', query: {'from': from, 'to': to, if (withUnapproved) 'include_unapproved': 'true'}));
   }
 
   @override

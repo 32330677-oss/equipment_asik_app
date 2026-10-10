@@ -455,6 +455,38 @@ Future<bool?> checkInSheet(BuildContext context,
   return (Fmt.wallOf(from), Fmt.wallOf(from.add(len)));
 }
 
+/// Default period for a new stop inside a closed session that does not overlap the stops already recorded:
+/// the usual lunch hour when it is free, otherwise up to one hour in the first free gap (at least 15 minutes).
+/// With no free gap, the lunch default is kept (the server then explains the overlap).
+(String, String) freeSlotDefault(String checkIn, String checkOut, List<Json> periods) {
+  final pref = lunchDefault(checkIn, checkOut);
+  final s = Fmt.parse(checkIn);
+  final e = Fmt.parse(checkOut);
+  if (s == null || e == null || !e.isAfter(s)) return pref;
+  final busy = <(DateTime, DateTime)>[];
+  for (final p in periods) {
+    final ps = Fmt.parse(p.strOrNull('start_time'));
+    if (ps == null) continue;
+    final pe = Fmt.parse(p.strOrNull('end_time')) ?? e;
+    if (pe.isAfter(ps)) busy.add((ps, pe));
+  }
+  if (busy.isEmpty) return pref;
+  bool free(DateTime a, DateTime b) => busy.every((x) => !b.isAfter(x.$1) || !a.isBefore(x.$2));
+  final ps = Fmt.parse(pref.$1);
+  final pe = Fmt.parse(pref.$2);
+  if (ps != null && pe != null && free(ps, pe)) return pref;
+  busy.sort((a, b) => a.$1.compareTo(b.$1));
+  var cursor = s;
+  for (final x in [...busy, (e, e)]) {
+    if (x.$1.difference(cursor) >= const Duration(minutes: 15)) {
+      final end = cursor.add(const Duration(hours: 1));
+      return (Fmt.wallOf(cursor), Fmt.wallOf(end.isAfter(x.$1) ? x.$1 : end));
+    }
+    if (x.$2.isAfter(cursor)) cursor = x.$2;
+  }
+  return pref;
+}
+
 /// Records a pause. On a session that is already checked out (Finished) the period must have an end:
 /// this is how a forgotten lunch break is added after the check-out.
 Future<bool?> downtimeSheet(BuildContext context, {required Json att, required String type, required String date}) {
@@ -465,7 +497,8 @@ Future<bool?> downtimeSheet(BuildContext context, {required Json att, required S
   var start = isLiveDay(date, shift: shift) ? Fmt.nowWall() : (wall16(checkIn) ?? defaultTime(date, start: true, shift: shift));
   String? end;
   if (checkIn != null && checkOut != null) {
-    final d = lunchDefault(checkIn, checkOut);
+    // a free slot: a second stop (e.g. a breakdown after the lunch) does not start on top of the first one
+    final d = freeSlotDefault(checkIn, checkOut, att.list('downtime'));
     start = d.$1;
     end = d.$2;
   }

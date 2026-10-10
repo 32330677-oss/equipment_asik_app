@@ -501,7 +501,7 @@ class _MachineCard extends StatelessWidget {
             // same width as the old "Edit" button: Edit times, or replace the session by a whole-day status
             // (a machine recorded as working that was in fact broken / absent). The server asks to confirm the
             // replacement; the row keeps its paper sheet number and the old times stay in the history.
-            actions.add(_editMenu(context));
+            actions.add(_editMenu(context, att, recordDate));
           }
           break;
         case 'Absent':
@@ -618,17 +618,22 @@ class _MachineCard extends StatelessWidget {
         child: OutlinedButton.icon(onPressed: onTap, icon: Icon(icon, size: 20), label: Text(label)),
       );
 
-  Widget _editMenu(BuildContext context) {
+  Widget _editMenu(BuildContext context, Json att, String recordDate) {
     return SizedBox(
       height: 48,
       child: PopupMenuButton<String>(
         tooltip: 'Edit',
         onSelected: (v) {
           if (v == 'times') _details(context);
+          // a breakdown or standby at another time of the day, also after the lunch and after the check-out
+          if (v == 'Breakdown' || v == 'Standby' || v == 'Refuel') onAction(downtimeSheet(context, att: att, type: v, date: recordDate));
           if (v == 'day') onAction(dayStatusSheet(context, machine: m, siteId: siteId, shift: shift, date: date, initial: 'Breakdown', access: access));
         },
         itemBuilder: (_) => const [
           PopupMenuItem(value: 'times', child: ListTile(leading: Icon(Icons.edit_rounded), title: Text('Edit times'))),
+          PopupMenuItem(value: 'Breakdown', child: ListTile(leading: Icon(Icons.build_circle_rounded, color: AppColors.breakdown), title: Text('Add a breakdown'))),
+          PopupMenuItem(value: 'Standby', child: ListTile(leading: Icon(Icons.pause_circle_filled_rounded, color: AppColors.standby), title: Text('Add a standby period'))),
+          PopupMenuItem(value: 'Refuel', child: ListTile(leading: Icon(Icons.local_gas_station_rounded, color: AppColors.onBreak), title: Text('Add a refuelling stop'))),
           PopupMenuItem(
             value: 'day',
             child: ListTile(
@@ -955,6 +960,16 @@ class _RowDetailSheetState extends State<RowDetailSheet> {
                 },
                 icon: const Icon(Icons.coffee_rounded),
                 label: const Text('Add break'),
+              ),
+            // a breakdown at another time of the day (a lunch already recorded does not block it)
+            if (a.str('day_status') == 'Working' && a.strOrNull('check_in_time') != null && a.objOrNull('open_downtime') == null)
+              FilledButton.tonalIcon(
+                onPressed: () async {
+                  final ok = await downtimeSheet(context, att: a, type: 'Breakdown', date: date);
+                  if (ok == true) await _reload();
+                },
+                icon: const Icon(Icons.build_circle_rounded),
+                label: const Text('Add breakdown'),
               ),
             if (a.str('status') == 'Rejected') FilledButton.icon(onPressed: _resubmit, icon: const Icon(Icons.send_rounded), label: const Text('Send again')),
             if (a.str('status') == 'Draft')

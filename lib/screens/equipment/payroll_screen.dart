@@ -48,6 +48,7 @@ const _reviewKinds = {
   'rate_card_changed': 'Rate card changed',
   'delivery_note_changed': 'Delivery note changed',
   'previous_balance': 'Unpaid balance of an earlier batch added',
+  'opening_balance': 'Opening balance (from before the system) added',
   'accepted_blockers': 'Generated with open problems',
 };
 
@@ -438,6 +439,15 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
 }
 
 /// Unpaid balances of earlier finalized batches of the same vendors, offered on New payroll.
+/// Where a carried balance comes from: an older batch, or an opening balance entered for money owed before the system.
+String _carrySource(Json c) {
+  if (c.str('kind') == 'opening') {
+    final period = c.strOrNull('start_date') == null ? '' : ' ${Fmt.date(c.str('start_date'))} - ${Fmt.date(c.str('end_date'))}';
+    return 'opening balance$period${c.strOrNull('equipment_code') == null ? '' : ' (${c.str('equipment_code')})'}: ${c.str('description')}';
+  }
+  return 'batch #${c.str('from_batch_id')} (${Fmt.date(c.str('start_date'))} - ${Fmt.date(c.str('end_date'))})';
+}
+
 class _CarryCard extends StatelessWidget {
   const _CarryCard({required this.list, required this.value, required this.onChanged});
   final List<Json> list;
@@ -463,13 +473,14 @@ class _CarryCard extends StatelessWidget {
           value: value,
           onChanged: (v) => onChanged(v ?? false),
           title: Text('Add previous balances (${totals.entries.map((e) => Fmt.money(e.value, e.key)).join(' + ')})', style: const TextStyle(fontWeight: FontWeight.w800)),
-          subtitle: const Text('These vendors are still owed money on earlier finalized invoices. Ticked: the balances move into this batch, '
-              'the old invoices are closed as "carried forward" and are paid here. Not ticked: they stay on their own batch.'),
+          subtitle: const Text('These vendors are still owed money on earlier finalized invoices, or have an opening balance from before the system. '
+              'Ticked: the balances move into this batch and are paid here (the old invoices are closed as "carried forward"). '
+              'Not ticked: they stay where they are.'),
         ),
         for (final c in list)
           Padding(
             padding: const EdgeInsets.only(left: 8, top: 2),
-            child: Text('${c.str('vendor_name')}  ·  batch #${c.str('from_batch_id')} (${Fmt.date(c.str('start_date'))} - ${Fmt.date(c.str('end_date'))})'
+            child: Text('${c.str('vendor_name')}  ·  ${_carrySource(c)}'
                 '${c.strOrNull('invoice_no') == null ? '' : '  ·  ${c.str('invoice_no')}'}  ·  ${Fmt.money2(c.strOrNull('amount'), c.str('currency'))}',
                 style: const TextStyle(fontSize: 13)),
           ),
@@ -994,7 +1005,7 @@ class _BatchScreenState extends State<BatchScreen> {
               for (final c in v.list('carried_in_detail'))
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Text('From batch #${c.str('from_batch_id')} (${Fmt.date(c.str('start_date'))} - ${Fmt.date(c.str('end_date'))})'
+                  child: Text('From ${_carrySource(c)}'
                       '${c.strOrNull('invoice_no') == null ? '' : ' ${c.str('invoice_no')}'}: ${Fmt.money2(c.strOrNull('amount'), cur)}',
                       style: const TextStyle(fontSize: 12.5, color: AppColors.edited)),
                 ),

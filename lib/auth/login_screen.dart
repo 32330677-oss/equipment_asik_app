@@ -7,8 +7,8 @@ import '../core/auth.dart';
 import '../core/config.dart';
 import '../core/theme.dart';
 
-/// Sign in. Wide screens: brand panel on the left, form card on the right.
-/// Phones: brand header on top, the form card overlapping it.
+/// Sign in, one vertical layout on every screen: navy band on top with the logo and the name,
+/// the form card under it (centered, at most 430 wide), the copyright at the bottom.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, this.message});
   final String? message;
@@ -182,146 +182,57 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Image.asset('assets/images/logo.png', width: width),
       );
 
-  Widget _feature(IconData icon, String title, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 18),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: AppColors.gold.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(11),
-              border: Border.all(color: AppColors.gold.withValues(alpha: 0.35)),
-            ),
-            child: Icon(icon, color: const Color(0xFFE2C77F), size: 21),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
-              const SizedBox(height: 2),
-              Text(text, style: const TextStyle(color: Color(0xFFB9C1DF), fontSize: 13, height: 1.35)),
-            ]),
-          ),
-        ]),
-      );
-
-  Widget _brandPanel() {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(colors: [AppColors.navyDark, AppColors.navy], begin: Alignment.topLeft, end: Alignment.bottomRight),
-      ),
-      child: CustomPaint(
-        painter: _BrandPattern(),
-        // short windows: the panel scrolls instead of overflowing
-        child: LayoutBuilder(
-          builder: (context, box) => SingleChildScrollView(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: box.maxHeight),
-              child: IntrinsicHeight(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(56, 48, 56, 36),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    _logoCard(118),
-                    const Spacer(),
-                    const SizedBox(height: 32),
-                    Text(AppConfig.companyName.toUpperCase(),
-                        style: const TextStyle(color: AppColors.gold, fontSize: 12.5, fontWeight: FontWeight.w800, letterSpacing: 2.2)),
-                    const SizedBox(height: 10),
-                    const Text(AppConfig.appName, style: TextStyle(color: Colors.white, fontSize: 46, fontWeight: FontWeight.w800, height: 1.1)),
-                    const SizedBox(height: 14),
-                    Container(width: 72, height: 4, decoration: BoxDecoration(color: AppColors.gold, borderRadius: BorderRadius.circular(2))),
-                    const SizedBox(height: 18),
-                    const Text('Rented machinery on site, from the first check-in to the vendor payment.',
-                        style: TextStyle(color: Color(0xFFD5DAEC), fontSize: 17, height: 1.5)),
-                    const SizedBox(height: 30),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 460),
-                      child: Column(children: [
-                        _feature(Icons.fact_check_rounded, 'Attendance & live board', 'Check-in, downtime and approvals per site and shift.'),
-                        _feature(Icons.receipt_long_rounded, 'Payroll & invoices', 'Finalized batches, vendor and machine invoices, payments.'),
-                        _feature(Icons.account_balance_wallet_rounded, 'Statements', 'Statement of account and billing history at any time.'),
-                      ]),
-                    ),
-                    const Spacer(),
-                    const SizedBox(height: 16),
-                    Text('© ${DateTime.now().year} ${AppConfig.companyName}', style: const TextStyle(color: Color(0xFF8E98BF), fontSize: 12.5)),
-                  ]),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _phone() {
-    const radius = BorderRadius.vertical(bottom: Radius.circular(28));
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final compact = size.width < 600;
+    // tall screens: the whole block moves down a little; the navy band grows with it
+    final top = compact ? 28.0 : math.max(44.0, (size.height - 900) / 3);
+    final bandHeight = top + (compact ? 300.0 : 336.0);
     return Scaffold(
       backgroundColor: AppColors.surface,
       body: SingleChildScrollView(
-        child: Column(children: [
+        child: Stack(children: [
+          // navy band on top; the form card overlaps its lower part
           Container(
+            height: bandHeight,
+            width: double.infinity,
             decoration: const BoxDecoration(
               gradient: LinearGradient(colors: [AppColors.navyDark, AppColors.navy], begin: Alignment.topLeft, end: Alignment.bottomRight),
-              borderRadius: radius,
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
             ),
             child: ClipRRect(
-              borderRadius: radius,
-              child: CustomPaint(
-                painter: _BrandPattern(),
-                child: SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    // the bottom space is covered by the form card
-                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 110),
-                    child: Row(children: [
-                      _logoCard(64),
-                      const SizedBox(width: 16),
-                      const Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(AppConfig.appName, style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800)),
-                          SizedBox(height: 2),
-                          Text(AppConfig.companyName, style: TextStyle(color: Color(0xFFB9C1DF), fontSize: 12.5)),
-                        ]),
-                      ),
-                    ]),
-                  ),
-                ),
-              ),
+              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(32)),
+              child: CustomPaint(painter: _BrandPattern(), child: const SizedBox.expand()),
             ),
           ),
-          Transform.translate(
-            offset: const Offset(0, -80),
+          SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Center(child: _formCard(compact: true)),
+              padding: EdgeInsets.fromLTRB(16, top, 16, 24),
+              child: Center(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  _logoCard(compact ? 92 : 110),
+                  const SizedBox(height: 18),
+                  Text(AppConfig.appName,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white, fontSize: compact ? 28 : 34, fontWeight: FontWeight.w800, height: 1.15)),
+                  const SizedBox(height: 10),
+                  Container(width: 56, height: 4, decoration: BoxDecoration(color: AppColors.gold, borderRadius: BorderRadius.circular(2))),
+                  const SizedBox(height: 10),
+                  Text(AppConfig.companyName.toUpperCase(),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFFE2C77F), fontSize: 11.5, fontWeight: FontWeight.w800, letterSpacing: 2)),
+                  SizedBox(height: compact ? 26 : 34),
+                  _formCard(compact: compact),
+                  const SizedBox(height: 22),
+                  Text('© ${DateTime.now().year} ${AppConfig.companyName}',
+                      textAlign: TextAlign.center, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                ]),
+              ),
             ),
           ),
         ]),
       ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final wide = MediaQuery.of(context).size.width >= 900;
-    if (!wide) return _phone();
-    return Scaffold(
-      backgroundColor: AppColors.surface,
-      body: Row(children: [
-        Expanded(flex: 6, child: _brandPanel()),
-        Expanded(
-          flex: 5,
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(32),
-              child: _formCard(compact: false),
-            ),
-          ),
-        ),
-      ]),
     );
   }
 }

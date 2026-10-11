@@ -8,6 +8,7 @@ import '../../core/theme.dart';
 import '../../widgets/file_versions.dart';
 import '../../widgets/lookups.dart';
 import '../../widgets/pdf_view.dart';
+import '../../widgets/statement_period.dart';
 import '../../widgets/ui.dart';
 import 'machines_screen.dart';
 
@@ -328,6 +329,17 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
         load: () => Api.I.getBytes('/equipment/statements/vendor/${widget.id}.pdf', query: {'from': from, 'to': to, if (withUnapproved) 'include_unapproved': 'true'}));
   }
 
+  /// Running statement: statement of account (since the start, this year or chosen dates).
+  Future<void> _account() async {
+    final q = await pickStatementPeriod(context, 'Statement of account');
+    if (q == null || !mounted) return;
+    final code = _v!.str('vendor_code');
+    PdfViewScreen.open(context,
+        title: 'Statement of account $code',
+        fileName: 'statement-of-account-$code-${q['to'] ?? Fmt.today()}.pdf',
+        load: () => Api.I.getBytes('/equipment/statements/vendor/${widget.id}/account.pdf', query: q));
+  }
+
   @override
   Widget build(BuildContext context) {
     final v = _v;
@@ -336,7 +348,23 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
         title: Text(v == null ? 'Vendor' : v.str('vendor_name')),
         actions: [
           if (v != null) ...[
-            TextButton.icon(onPressed: _statement, icon: const Icon(Icons.picture_as_pdf_rounded), label: const Text('Statement')),
+            PopupMenuButton<String>(
+              tooltip: 'Statements',
+              onSelected: (x) => x == 'running' ? _account() : _statement(),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'provisional', child: ListTile(leading: Icon(Icons.pending_actions_rounded), title: Text('Provisional statement'), subtitle: Text('Days not invoiced yet in a period (approved, or incl. not approved)'))),
+                PopupMenuItem(value: 'running', child: ListTile(leading: Icon(Icons.account_balance_wallet_rounded), title: Text('Statement of account'), subtitle: Text('Every invoice, payment and note, with the balance owed'))),
+              ],
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.picture_as_pdf_rounded, size: 20),
+                  SizedBox(width: 6),
+                  Text('Statements'),
+                  Icon(Icons.arrow_drop_down_rounded),
+                ]),
+              ),
+            ),
             if (_canEdit)
               PopupMenuButton<String>(
                 onSelected: (x) async {

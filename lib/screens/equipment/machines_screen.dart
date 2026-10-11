@@ -9,6 +9,7 @@ import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/lookups.dart';
 import '../../widgets/pdf_view.dart';
+import '../../widgets/statement_period.dart';
 import '../../widgets/ui.dart';
 import 'delivery_notes_screen.dart';
 import 'rate_card_form.dart';
@@ -436,6 +437,17 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
         load: () => Api.I.getBytes('/equipment/statements/machine/${widget.id}.pdf', query: {'from': from, 'to': to, if (withUnapproved) 'include_unapproved': 'true'}));
   }
 
+  /// Running statement: billing history (since the start, this year or chosen dates).
+  Future<void> _history() async {
+    final q = await pickStatementPeriod(context, 'Billing history');
+    if (q == null || !mounted) return;
+    final code = _m!.str('equipment_code');
+    PdfViewScreen.open(context,
+        title: 'Billing history $code',
+        fileName: 'billing-history-$code-${q['to'] ?? Fmt.today()}.pdf',
+        load: () => Api.I.getBytes('/equipment/statements/machine/${widget.id}/history.pdf', query: q));
+  }
+
   @override
   Widget build(BuildContext context) {
     final m = _m;
@@ -444,7 +456,23 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
         title: Text(m == null ? 'Machine' : '${m.str('equipment_code')}  ${m.machineType}'),
         actions: [
           if (m != null) ...[
-            TextButton.icon(onPressed: _statement, icon: const Icon(Icons.picture_as_pdf_rounded), label: const Text('Statement')),
+            PopupMenuButton<String>(
+              tooltip: 'Statements',
+              onSelected: (x) => x == 'running' ? _history() : _statement(),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'provisional', child: ListTile(leading: Icon(Icons.pending_actions_rounded), title: Text('Provisional statement'), subtitle: Text('Days not invoiced yet in a period (approved, or incl. not approved)'))),
+                PopupMenuItem(value: 'running', child: ListTile(leading: Icon(Icons.account_balance_wallet_rounded), title: Text('Billing history'), subtitle: Text('Every period billed, its invoice numbers, and the days not billed yet'))),
+              ],
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.picture_as_pdf_rounded, size: 20),
+                  SizedBox(width: 6),
+                  Text('Statements'),
+                  Icon(Icons.arrow_drop_down_rounded),
+                ]),
+              ),
+            ),
             if (_admin)
               IconButton(
                 tooltip: 'Edit',

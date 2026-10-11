@@ -312,8 +312,9 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
   /// Current value of a field: the pending change if any, else the row.
   Object? _cur(Json r, Map<String, dynamic> changes, String key) => changes.containsKey(key) ? changes[key] : r[key];
 
-  /// Several fields in one go. Before the lock: a direct office edit (reason required on an Approved row, which then
-  /// shows as "edited after approval"). Inside a finalized / paid period: an official Correction, approved by another person.
+  /// Several fields in one go. Before the lock: a direct office edit (reason optional; an Approved row then shows as
+  /// "edited after approval"). Inside a finalized / paid period: an official Correction — applied at once by an Admin,
+  /// sent to an Admin for approval by an Accountant.
   Future<void> _edit({required bool correction}) async {
     final r = _r!;
     final changes = <String, dynamic>{};
@@ -355,11 +356,14 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
     }
     if (changes.isEmpty || !mounted) return;
     if (correction) {
+      final admin = Auth.I.isAdmin;
       final reason = await promptText(context, 'Reason of the correction',
           label: 'Reason (printed on the debit / credit note)',
           minLength: 5,
+          confirm: admin ? 'Apply correction' : 'Send to the Admin',
           help: 'This period is already ${r.str('locked_by_status', 'finalized').toLowerCase()}: the paid batch never changes. '
-              'The difference is settled by a debit or credit note in the first open period, after another Admin or Accountant approves.');
+              'The difference is settled by a debit or credit note in the first open period'
+              '${admin ? ' as soon as you apply it.' : ', after an Admin approves it.'}');
       if (reason == null || !mounted) return;
       final amount = await promptText(context, 'Amount to settle (optional)',
           label: 'Amount',
@@ -386,7 +390,9 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                 if (amountOverride != null) 'amount_override': amountOverride,
                 if (overrideReason != null) 'override_reason': overrideReason,
               }),
-          'Correction requested. Another Admin or Accountant approves it in Fuel & adjustments -> Corrections.');
+          admin
+              ? 'Correction applied: the debit / credit note and the adjustment were issued.'
+              : 'Sent to the Admin for approval (Fuel & adjustments -> Corrections).');
     } else {
       final approved = r.str('status') == 'Approved';
       final stale = r.intOrNull('generated_batch_id') != null;
@@ -394,8 +400,8 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         if (approved) 'The row stays Approved and is marked as edited after approval.',
         if (stale) 'Draft payroll batch #${r.str('generated_batch_id')} uses this row: it becomes out of date and must be regenerated.',
       ];
-      final reason = await promptText(context, approved ? 'Why change an approved row?' : 'Reason (optional)',
-          label: 'Reason', required: approved, minLength: approved ? 5 : 0, help: notes.isEmpty ? null : notes.join(' '));
+      final reason = await promptText(context, approved ? 'Why change an approved row? (optional)' : 'Reason (optional)',
+          label: 'Reason (optional)', required: false, help: notes.isEmpty ? null : notes.join(' '));
       if (reason == null) return;
       await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}', {...changes, if (reason.trim().isNotEmpty) 'reason': reason.trim()}),
           approved ? 'Saved. The row stays Approved and is marked as edited after approval.' : 'Saved.');
@@ -545,13 +551,14 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
   Future<void> _void() async {
     final r = _r!;
     final reason = await promptText(context, 'Void this row?',
-        label: 'Why should this row not exist?',
-        minLength: 5,
+        label: 'Why should this row not exist? (optional)',
+        required: false,
         confirm: 'Void the row',
         help: 'The row is kept in the history as Cancelled and is not paid.'
             '${r.intOrNull('generated_batch_id') == null ? '' : ' Draft payroll batch #${r.str('generated_batch_id')} becomes out of date.'}');
     if (reason == null) return;
-    await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}/cancel', {'reason': reason}), 'Row voided (kept as Cancelled).');
+    await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}/cancel', {if (reason.trim().isNotEmpty) 'reason': reason.trim()}),
+        'Row voided (kept as Cancelled).');
   }
 
   Future<void> _decideRequest(Json cr, {required bool approve}) async {
@@ -575,11 +582,12 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         return;
       }
       final ok = await confirmDialog(context, 'This period is already paid',
-          '${e.message}\n\nTurn the request into an official Correction? Another Admin or Accountant then approves it, and the difference is settled by a debit / credit note.',
-          confirm: 'Make it a Correction');
+          '${e.message}\n\nTurn the request into an official Correction? '
+          '${Auth.I.isAdmin ? 'It is applied at once' : 'An Admin then approves it'}, and the difference is settled by a debit / credit note.',
+          confirm: Auth.I.isAdmin ? 'Apply as a Correction' : 'Send to the Admin');
       if (!ok) return;
       await _do(() => Api.I.patch('/equipment/admin/change-requests/$id/approve', {'convert_to_correction': true, if (note.isNotEmpty) 'note': note}),
-          'Correction requested from the change request.');
+          Auth.I.isAdmin ? 'Correction applied from the change request.' : 'Correction sent to the Admin for approval.');
     }
   }
 
@@ -697,8 +705,8 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                           color: lockedStatus == 'Paid' ? AppColors.working : AppColors.navy,
                           icon: Icons.lock_rounded,
                           title: '$lockedStatus by batch #${r.str('locked_by_batch_id')}',
-                          text: 'This period is financially committed: the row is never edited directly. Use an official Correction; '
-                              'another Admin or Accountant approves it and the difference is settled by a debit / credit note.',
+                          text: 'This period is financially committed: the row is never edited directly. Use an official Correction '
+                              '(an Admin applies it at once; an Accountant sends it to an Admin). The difference is settled by a debit / credit note.',
                         ),
                       if (office && !cancelled)
                         Wrap(spacing: 8, runSpacing: 8, children: [
@@ -710,7 +718,11 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                               label: const Text('Void row', style: TextStyle(color: AppColors.breakdown)),
                             ),
                           ] else
-                            FilledButton.tonalIcon(onPressed: () => _edit(correction: true), icon: const Icon(Icons.gavel_rounded), label: const Text('Request official correction')),
+                            FilledButton.tonalIcon(
+                              onPressed: () => _edit(correction: true),
+                              icon: const Icon(Icons.gavel_rounded),
+                              label: Text(admin ? 'Official correction' : 'Official correction (to the Admin)'),
+                            ),
                         ]),
                       if (r.list('change_requests').isNotEmpty) ...[
                         const SizedBox(height: 12),

@@ -59,6 +59,10 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
   final _monthly = TextEditingController();
   final _stdHours = TextEditingController(text: '8');
   bool _ot = false;
+  // Monthly (11 Oct 2026): pay overtime or not (default ON for a new card), and what the monthly price is divided by
+  bool _monthlyOt = true;
+  String _divisor = 'MonthDays';
+  final _fixedDays = TextEditingController(text: '26');
   final _otThreshold = TextEditingController();
   final _otRate = TextEditingController();
   final _otMult = TextEditingController(text: '1');
@@ -120,6 +124,9 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       _monthly.text = t('monthly_rate');
       _stdHours.text = t('standard_hours_per_day');
       _ot = c.flag('overtime_enabled');
+      _monthlyOt = c.flag('overtime_enabled');
+      _divisor = c.str('monthly_divisor', 'MonthDays');
+      if (t('monthly_working_days').isNotEmpty) _fixedDays.text = t('monthly_working_days');
       _otThreshold.text = t('overtime_threshold_hours');
       _otRate.text = t('overtime_rate');
       _otMult.text = t('overtime_multiplier');
@@ -196,10 +203,14 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       'standard_hours_per_day': numOrNull(_stdHours),
       // no minimum billable hours: not used by the company (an old value is cleared when the card is saved)
       'min_billable_hours_per_day': null,
-      // Monthly: overtime is always counted (hours above the hours due), at the month's hourly price unless a price is typed.
-      'overtime_enabled': _mode == 'Monthly' ? true : _ot,
+      // Monthly: overtime (hours above the hours due) is paid only when switched on, at the overtime price typed or,
+      // empty, at the month's hourly price. Off: the extra hours are not paid.
+      'overtime_enabled': _mode == 'Monthly' ? _monthlyOt : _ot,
       'overtime_threshold_hours': _mode != 'Monthly' && _ot ? numOrNull(_otThreshold) : null,
-      'overtime_rate': _mode == 'Monthly' || _ot ? numOrNull(_otRate) : null,
+      'overtime_rate': (_mode == 'Monthly' && _monthlyOt) || (_mode != 'Monthly' && _ot) ? numOrNull(_otRate) : null,
+      // Monthly: the price is divided by the working days of the actual month, or by a fixed number of days (e.g. 26)
+      'monthly_divisor': _mode == 'Monthly' ? _divisor : null,
+      'monthly_working_days': _mode == 'Monthly' && _divisor == 'Fixed' ? int.tryParse(_fixedDays.text.trim()) : null,
       'overtime_multiplier': _mode != 'Monthly' && _ot ? numOrNull(_otMult) : null,
       'standby_billable_pct': numOrNull(_standbyPct),
       'breakdown_billable_pct': numOrNull(_breakdownPct),
@@ -420,7 +431,13 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               if (_mode == 'Daily') textField(_daily, 'Price per day', number: true, required: true),
               if (_mode == 'Monthly') textField(_monthly, 'Price per month', number: true, required: true),
               textField(_stdHours, _mode == 'Monthly' ? 'Working hours per day at the site' : 'Standard hours per day', number: true, required: true, suffix: 'h'),
-              if (_mode == 'Monthly') textField(_otRate, 'Overtime price per hour', number: true, hint: 'empty = the hourly price of the month'),
+              if (_mode == 'Monthly')
+                Dropdown<String>(label: 'Divide the monthly price by', value: _divisor, width: null, items: const [
+                  DropdownMenuItem(value: 'MonthDays', child: Text('The working days of the actual month')),
+                  DropdownMenuItem(value: 'Fixed', child: Text('A fixed number of days')),
+                ], onChanged: (v) => setState(() => _divisor = v ?? _divisor)),
+              if (_mode == 'Monthly' && _divisor == 'Fixed')
+                textField(_fixedDays, 'Fixed number of days', number: true, decimal: false, required: true, hint: 'e.g. 26'),
               if (_mode == 'Daily')
                 Dropdown<String>(label: 'Partial day', value: _partial, width: null, items: const [
                   DropdownMenuItem(value: 'ProRata', child: Text('Pro rata of the hours')),
@@ -435,9 +452,22 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               ? 'DNR = Delivery Note Registry: the vendor is paid per unit written on each delivery note (per trip, per ton...). '
                   'It does not replace the time rate card: the same machine can be paid by the hour for one job and per trip for another.'
               : _mode == 'Monthly'
-                  ? 'Working days of a month = days of the month minus Fridays. Hourly price = monthly price / working days / hours per day. '
-                      'Hours due = working days x hours per day. All hours done = full month; more = overtime; fewer = missing hours deducted.'
+                  ? 'D = ${_divisor == 'Fixed' ? 'the fixed number of days' : 'the working days of the month (days minus Fridays)'}; it can also be typed per month on New payroll. '
+                      'Hourly price = monthly price / D / hours per day. Hours due = deployed working days (at most D) x hours per day. '
+                      'All hours done = full month; fewer = missing hours deducted; more = overtime, only if "Pay overtime" is on.'
                   : null),
+          if (_mode == 'Monthly') _section('Overtime', [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _monthlyOt,
+              onChanged: (v) => setState(() => _monthlyOt = v),
+              title: const Text('Pay overtime'),
+              subtitle: Text(_monthlyOt
+                  ? 'Hours above the hours due of the month are paid'
+                  : 'Hours above the hours due are NOT paid (shown on the invoice as unpaid extra hours)'),
+            ),
+            if (_monthlyOt) textField(_otRate, 'Overtime price per hour', number: true, hint: 'empty = the hourly price of the month'),
+          ]),
           if (_mode != 'Monthly' && !_dnr) _section('Overtime', [
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -626,8 +656,10 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(color: AppColors.gold.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
                 child: Text(
-                  '${mo.str('month')}: ${mo.str('working_days')} working days x ${mo.str('hours_per_day')} h = ${mo.dbl('required_hours').toStringAsFixed(2)} h due · '
-                  'done ${mo.dbl('billable_hours').toStringAsFixed(2)} h · hourly price ${mo.dbl('hourly_price').toStringAsFixed(3)}',
+                  '${mo.str('month')}: D = ${mo.str('divisor', mo.str('working_days'))} (${mo.str('divisor_source', 'calendar')}; calendar ${mo.str('working_days')}) · '
+                  '${mo.str('base_days', mo.str('deployed_working_days'))} base days x ${mo.str('hours_per_day')} h = ${mo.dbl('required_hours').toStringAsFixed(2)} h due · '
+                  'done ${mo.dbl('billable_hours').toStringAsFixed(2)} h · hourly price H ${mo.dbl('hourly_price').toStringAsFixed(3)} · '
+                  '${mo.dbl('unpaid_extra_hours') > 0 ? '+${mo.dbl('unpaid_extra_hours').toStringAsFixed(2)} h NOT paid (overtime off)' : mo.flag('overtime_paid') ? 'overtime paid' : 'overtime off'}',
                   style: const TextStyle(fontSize: 12.5),
                 ),
               ),

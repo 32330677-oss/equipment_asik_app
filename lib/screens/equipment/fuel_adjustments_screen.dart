@@ -485,8 +485,8 @@ Future<Json?> showAdjustmentDialog(BuildContext context, {PickOption? machine, P
 
 // ================================================================= corrections
 /// Official corrections of money already committed by a finalized (or paid) payroll: attendance rows, fuel issues,
-/// rate card prices and other amounts. Admin or Accountant requests; ANOTHER Admin or Accountant approves (a debit /
-/// credit note settles it in the first open period). Whoever changes the request (amount, fields) cannot approve that version.
+/// rate card prices and other amounts. Policy of 11 Oct 2026: an Admin's correction is applied at once; an Accountant's
+/// request waits for an Admin (another Accountant cannot approve it). A debit / credit note settles it in the first open period.
 class _CorrectionsTab extends StatefulWidget {
   const _CorrectionsTab();
   @override
@@ -569,7 +569,7 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
           return true;
         }).then((ok) {
       if (ok == true) {
-        if (mounted) showSnack(context, 'Saved. Another Admin or Accountant approves it.');
+        if (mounted) showSnack(context, Auth.I.isAdmin ? 'Saved. Approve it to apply it.' : 'Saved. An Admin approves it.');
         _load();
       }
     });
@@ -644,11 +644,11 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
     return PageBody(onRefresh: _load, maxWidth: 1100, children: [
       PageHeader(
           title: 'Corrections',
-          subtitle: 'Changes to money already in a finalized or paid payroll. One person requests, another Admin or Accountant approves; '
-              'approval issues a debit / credit note in the first open period.',
+          subtitle: 'Changes to money already in a finalized or paid payroll. An Admin applies a correction at once; '
+              'an Accountant sends it to an Admin for approval. Approval issues a debit / credit note in the first open period.',
           actions: [
-            Dropdown<String?>(label: 'Status', value: _status, width: 170, items: const [
-              DropdownMenuItem(value: 'Requested,Reviewed', child: Text('Waiting')),
+            Dropdown<String?>(label: 'Status', value: _status, width: 220, items: [
+              DropdownMenuItem(value: 'Requested,Reviewed', child: Text(admin ? 'Waiting for your approval' : 'Waiting for the Admin')),
               DropdownMenuItem(value: null, child: Text('All')),
               DropdownMenuItem(value: 'Requested', child: Text('Requested')),
               DropdownMenuItem(value: 'Reviewed', child: Text('Reviewed')),
@@ -713,7 +713,7 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
           if (open && !c.flag('can_approve'))
             const Padding(
               padding: EdgeInsets.only(bottom: 8),
-              child: Text('You wrote the last version of this request: another Admin or Accountant must approve it.',
+              child: Text('Waiting for an Admin to approve it. You can still change or cancel your request.',
                   style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
             ),
           Wrap(spacing: 8, runSpacing: 8, children: [

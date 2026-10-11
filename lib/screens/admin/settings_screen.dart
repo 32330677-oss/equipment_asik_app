@@ -15,7 +15,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _s = Loadable<List<Json>>();
 
   static const _groups = <String, List<String>>{
-    'Paper sheets & payroll': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_finalize_requires_scan', 'eq_paid_undo_hours', 'eq_default_currency'],
+    'Paper sheets & payroll': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_finalize_requires_scan', 'eq_finalize_undo_hours', 'eq_paid_undo_hours', 'eq_default_currency'],
     'Billing rules': ['eq_weekly_off_day', 'eq_fuel_diff_allow_negative'],
     'Attendance checks': ['eq_meter_tolerance_pct', 'eq_long_session_review_hours', 'eq_late_entry_days', 'week_gate_enabled', 'week_start_day', 'eq_shift_continuity_minutes'],
     'General': ['company_name', 'app_time_zone', 'eq_live_refresh_seconds'],
@@ -38,6 +38,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'eq_weekly_off_day': 'Weekly day off (monthly machines)',
     'eq_fuel_diff_allow_negative': 'Deduct the fuel difference when the official price falls below the base',
     'eq_paid_undo_hours': 'Hours to undo "Mark paid" (0 = never)',
+    'eq_finalize_undo_hours': 'Hours to undo "Finalize" with the same invoice numbers (0 = never)',
     'eq_late_entry_days': 'Late entry after (days)',
   };
   static const _days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];

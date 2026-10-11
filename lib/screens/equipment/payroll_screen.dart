@@ -953,9 +953,9 @@ class _ItemTile extends StatelessWidget {
             child: Wrap(spacing: 14, runSpacing: 4, children: [
               if (item.str('billing_mode') == 'DNR') ...[
                 kv('Delivery notes', '${item.list('lines').where((l) => l.str('line_type') == 'DeliveryNote').length}'),
-                kv('Days', item.str('worked_days')),
+                kv('Shifts', item.str('worked_days')),
               ] else ...[
-                kv('Days', '${item.str('worked_days')}/${item.str('days_recorded')}'),
+                kv('Shifts', '${item.str('worked_days')}/${item.str('days_recorded')}'),
                 kv('Work h', item.str('work_hours')),
               ],
               if (item.dbl('overtime_hours') > 0) kv('OT h', item.str('overtime_hours')),

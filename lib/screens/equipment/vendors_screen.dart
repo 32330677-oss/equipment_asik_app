@@ -319,7 +319,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
     // the office may want the amounts before approving: Submitted days can be counted too (marked * on the PDF)
     final which = await pickFromList(context, 'Which days?', [
       PickOption(false, 'Approved days only', 'What the invoice will contain'),
-      PickOption(true, 'Include days not approved yet', 'Submitted by the supervisor, waiting for approval: marked * on the PDF'),
+      PickOption(true, 'Include days not approved yet', 'Submitted by the supervisor, waiting for approval: the PDF shows how many'),
     ]);
     if (which == null || !mounted) return;
     final withUnapproved = which.value == true;

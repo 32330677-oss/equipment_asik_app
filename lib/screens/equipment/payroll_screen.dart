@@ -990,7 +990,7 @@ class _ItemTile extends StatelessWidget {
                         child: Text('${_lineName(l.str('line_type'))}${l.strOrNull('note') == null ? '' : '\n${l.str('note')}'}', style: const TextStyle(fontSize: 13)),
                       ),
                       _Td('${Fmt.num2(l.dblOrNull('quantity'))} ${l.str('unit')}'),
-                      _Td(['FuelPriceDifference', 'Fuel', 'HoursShortfall', 'Overtime'].contains(l.str('line_type'))
+                      _Td(['FuelPriceDifference', 'Fuel', 'HoursShortfall', 'BreakdownDeduction', 'AbsenceDeduction', 'Overtime'].contains(l.str('line_type'))
                           ? (l.dblOrNull('unit_price') ?? 0).toStringAsFixed(3)
                           : Fmt.num2(l.dblOrNull('unit_price'))),
                       _Td(Fmt.money(l.dblOrNull('amount'), cur), color: l.dbl('amount') < 0 ? AppColors.breakdown : AppColors.ink, bold: true),
@@ -1039,6 +1039,10 @@ String _monthText(Json mo, String cur) {
   final miss = mo.dbl('missing_hours');
   final unpaid = mo.dbl('unpaid_extra_hours');
   final price = mo.dblOrNull('overtime_price') ?? h;
+  final bd = mo.dbl('breakdown_deducted_hours');
+  final ab = mo.dbl('absence_deducted_hours');
+  final bdText = '${bd > 0 ? 'breakdown -${bd.toStringAsFixed(2)} h deducted; ' : ''}'
+      '${ab > 0 ? 'absent ${mo.intv('absent_days')} day(s) -${ab.toStringAsFixed(2)} h deducted; ' : ''}';
   final result = ot > 0
       ? '+${ot.toStringAsFixed(2)} h x ${price.toStringAsFixed(2)} = ${Fmt.money(ot * price, cur)}'
       : ot < 0
@@ -1054,7 +1058,7 @@ String _monthText(Json mo, String cur) {
   return '${Fmt.monthLabel(mo.str('month'))}: ${mo.str('deployed_working_days')} working day(s) on site, divided by $d ($src), '
       'hourly price ${h.toStringAsFixed(3)}${mo.str('hourly_source') == 'manual' ? ' (typed)' : ''}'
       '${mo.intv('holiday_days') > 0 ? ', ${mo.str('holiday_days')} holiday(s)' : ''}  ·  '
-      '${mo.dbl('required_hours').toStringAsFixed(2)} h due, ${mo.dbl('billable_hours').toStringAsFixed(2)} h done  ·  $result'
+      '${mo.dbl('required_hours').toStringAsFixed(2)} h due, ${mo.dbl('billable_hours').toStringAsFixed(2)} h done  ·  $bdText$result'
       '${before.isEmpty ? '' : '  ·  already billed before: ${before.str('base_days')} base day(s), ${before.dbl('billable_hours').toStringAsFixed(2)} h'}';
 }
 

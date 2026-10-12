@@ -7,6 +7,7 @@ import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/file_versions.dart';
 import '../../widgets/lookups.dart';
+import '../../widgets/pdf_content.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/statement_period.dart';
 import '../../widgets/ui.dart';
@@ -323,10 +324,12 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
     ]);
     if (which == null || !mounted) return;
     final withUnapproved = which.value == true;
+    final hide = await askPdfContent(context);
+    if (hide == null || !mounted) return;
     PdfViewScreen.open(context,
         title: 'Statement ${_v!.str('vendor_name')}${withUnapproved ? ' (incl. not approved)' : ''}',
         fileName: 'statement-${_v!.str('vendor_code')}-$from-$to${withUnapproved ? '-not-approved' : ''}.pdf',
-        load: () => Api.I.getBytes('/equipment/statements/vendor/${widget.id}.pdf', query: {'from': from, 'to': to, if (withUnapproved) 'include_unapproved': 'true'}));
+        load: () => Api.I.getBytes('/equipment/statements/vendor/${widget.id}.pdf', query: {'from': from, 'to': to, if (withUnapproved) 'include_unapproved': 'true', if (hide.isNotEmpty) 'hide': (hide.toList()..sort()).join(',')}));
   }
 
   /// Running statement: statement of account (since the start, this year or chosen dates).

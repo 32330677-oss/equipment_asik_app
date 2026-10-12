@@ -7,6 +7,7 @@ import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/lookups.dart';
+import '../../widgets/pdf_content.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 import 'attendance_review_screen.dart' show AttendanceDetailSheet;
@@ -29,7 +30,7 @@ const _blockerHelp = {
   'IN_OTHER_BATCH': 'Already in another batch (draft or finalized); they are skipped. Each day is billed once.',
   'FUEL_PRICE_MISSING': 'Add the official fuel price for these dates in Fuel & adjustments > Fuel prices.',
   'SCAN_MISSING': 'Information only: the accountant must upload these signed sheets (Paper sheets) before the Admin finalizes.',
-  'MONTHLY_DAYS_WITHOUT_ROWS': 'Each of these days is deducted as a full absence, and extra hours on other days do not make up for it. '
+  'MONTHLY_DAYS_WITHOUT_ROWS': 'Each of these days is deducted as a full absence; extra hours of other days cover it only if the Admin decides so. '
       'If the machine worked, the supervisor must record the day; if it did not, record it as Absent, Standby, Breakdown or Holiday. '
       'Or generate anyway with a reason.',
 };
@@ -55,6 +56,9 @@ const _reviewKinds = {
   'previous_balance': 'Unpaid balance of an earlier batch added',
   'opening_balance': 'Opening balance (from before the system) added',
   'accepted_blockers': 'Generated with open problems',
+  'monthly_exception': 'Exception typed for the month (monthly machine)',
+  'monthly_offset': 'Extra hours used to cover missing hours (Admin decision)',
+  'monthly_offset_not_used': 'Extra hours NOT used to cover missing hours',
 };
 
 const _payMethods = {'BankTransfer': 'Bank transfer', 'Cheque': 'Cheque', 'Cash': 'Cash', 'Other': 'Other'};
@@ -247,6 +251,9 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
 
   // 3. terms of the month of the monthly machines chosen
   List<Json>? _terms;
+
+  /// Admin decision on the preview: monthly machines and months whose extra hours cover their missing hours
+  final Set<String> _offsets = {};
   bool _termsLoading = false;
 
   @override
@@ -275,11 +282,12 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
         if (_site != null) 'site_id': _site!.value,
         if (_currency != null) 'currency': _currency,
         if (_take.isNotEmpty) 'take_from_drafts': true,
+        if (_offsets.isNotEmpty) 'offsets': _offsets.toList()..sort(),
       };
 
   /// GET routes take the machines as "1,2,3".
   Map<String, dynamic> get _query => {
-        ..._scope..remove('take_from_drafts'),
+        ..._scope..remove('take_from_drafts')..remove('offsets'),
         if (_machineList != null) 'equipment_ids': _machineList!.join(','),
       };
 
@@ -497,11 +505,13 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
         if (_terms != null && _terms!.isNotEmpty) ...[
           const SizedBox(height: 14),
           SectionCard(
-            title: '${step++}. Terms of the month',
+            title: '${step++}. Monthly machines: normal month or exception',
             trailing: _termsLoading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : null,
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const Text('Monthly machines: what the monthly price is divided by (D) and the hourly price, per machine and month. '
-                  'Change them before the preview; they are kept on the machine and the month (not on the batch).',
+              const Text('Monthly machines are billed as a normal month (the card\'s monthly price, whatever the number of working days). '
+                  'When a month is billed differently for one machine, type an exception here BEFORE the preview: the amount of the month, '
+                  'the days it is divided by, or the hourly price used for deductions and overtime. It is kept on the machine and the month, '
+                  'and it cannot change while a batch bills that month.',
                   style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
               const SizedBox(height: 8),
               for (final t in _terms!)
@@ -585,7 +595,19 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
                 _CarryCard(list: p.list('carry_forward'), value: _carry, onChanged: (v) => setState(() => _carry = v)),
               ],
               const SizedBox(height: 12),
-              for (final it in items) _ItemTile(item: it, preview: true),
+              for (final it in items)
+                _ItemTile(
+                  item: it,
+                  preview: true,
+                  offsetKeys: _offsets,
+                  onOffset: Auth.I.isAdmin && !_busy
+                      ? (key, on) {
+                          setState(() => on ? _offsets.add(key) : _offsets.remove(key));
+                          _check();
+                        }
+                      : null,
+                  offsetNote: Auth.I.isAdmin ? null : 'Only the Admin decides this, on the draft before finalizing.',
+                ),
             ]),
           ),
         ],
@@ -641,8 +663,10 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
   }
 }
 
-/// One monthly machine x month on New payroll: D (working days the price is divided by) and the hourly price, typed
-/// or from the card. Saved when the field is left; ↺ goes back to the card. Locked once a finalized batch billed the month.
+/// One monthly machine x month on New payroll (12 Oct 2026): a NORMAL month by default (the card's monthly price divided
+/// by the working days of the month), or an EXCEPTION typed for this machine and month: the amount of the month, the days
+/// it is divided by and / or the hourly price. Saved when a field is left; ↺ goes back to a normal month. Locked while a
+/// batch (draft or finalized) bills the month: void the draft first.
 class _MonthTermsTile extends StatefulWidget {
   const _MonthTermsTile({super.key, required this.row, required this.onSaved});
   final Json row;
@@ -652,6 +676,7 @@ class _MonthTermsTile extends StatefulWidget {
 }
 
 class _MonthTermsTileState extends State<_MonthTermsTile> {
+  late final TextEditingController _amount;
   late final TextEditingController _days;
   late final TextEditingController _hourly;
   bool _hourlyTyped = false;
@@ -660,52 +685,67 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
   @override
   void initState() {
     super.initState();
-    _days = TextEditingController(text: widget.row.str('divisor'));
-    _hourly = TextEditingController(text: _fmt(widget.row.dbl('hourly')));
-    _hourlyTyped = widget.row.str('hourly_source') == 'manual';
+    _amount = TextEditingController();
+    _days = TextEditingController();
+    _hourly = TextEditingController();
+    _fill();
+  }
+
+  void _fill() {
+    final r = widget.row;
+    _amount.text = _fmt(r.dblOrNull('amount') ?? r.dbl('monthly_rate'));
+    _days.text = r.str('divisor');
+    _hourly.text = _fmt(r.dbl('hourly'));
+    _hourlyTyped = r.str('hourly_source') == 'manual';
   }
 
   @override
   void didUpdateWidget(covariant _MonthTermsTile old) {
     super.didUpdateWidget(old);
-    if (old.row != widget.row) {
-      _days.text = widget.row.str('divisor');
-      _hourly.text = _fmt(widget.row.dbl('hourly'));
-      _hourlyTyped = widget.row.str('hourly_source') == 'manual';
-    }
+    if (old.row != widget.row) _fill();
   }
 
   @override
   void dispose() {
+    _amount.dispose();
     _days.dispose();
     _hourly.dispose();
     super.dispose();
   }
 
   static String _fmt(double v) => v.toStringAsFixed(v == v.roundToDouble() ? 0 : 4).replaceFirst(RegExp(r'\.?0+$'), '');
+  static double? _num(TextEditingController c) => double.tryParse(c.text.trim().replaceAll(',', '.'));
 
-  /// Hourly price from the days typed (until a price is typed by hand).
-  void _daysChanged(String v) {
+  /// Hourly price follows the amount and the days (until a price is typed by hand).
+  void _recalc() {
     if (_hourlyTyped) return;
-    final d = int.tryParse(v.trim());
-    final r = widget.row;
-    if (d == null || d < 1) return;
-    setState(() => _hourly.text = _fmt(((r.dbl('monthly_rate') / d / r.dbl('hours_per_day')) * 10000).round() / 10000));
+    final a = _num(_amount);
+    final d = int.tryParse(_days.text.trim());
+    final hpd = widget.row.dbl('hours_per_day');
+    if (a == null || d == null || d < 1 || hpd <= 0) return;
+    setState(() => _hourly.text = _fmt(((a / d / hpd) * 10000).round() / 10000));
   }
 
   Future<void> _save({bool reset = false}) async {
     final r = widget.row;
+    final a = _num(_amount);
     final d = int.tryParse(_days.text.trim());
-    final h = double.tryParse(_hourly.text.trim().replaceAll(',', '.'));
+    final h = _num(_hourly);
+    final amountChanged = a != null && (a - (r.dblOrNull('amount') ?? r.dbl('monthly_rate'))).abs() > 0.004;
     final daysChanged = d != null && d != r.intv('divisor');
     final hourlyChanged = _hourlyTyped && h != null && (h - r.dbl('hourly')).abs() > 0.00005;
-    if (!reset && !daysChanged && !hourlyChanged) return;
+    if (!reset && !amountChanged && !daysChanged && !hourlyChanged) return;
     setState(() => _saving = true);
     try {
+      final keepAmount = amountChanged || r.str('amount_source') == 'manual';
+      final keepDays = daysChanged || r.str('divisor_source') == 'manual';
       final row = asJson(await Api.I.put('/equipment/payroll/monthly-terms', {
         'equipment_id': r.intv('equipment_id'),
         'month': r.str('month'),
-        'working_days': reset ? null : (daysChanged || r.str('divisor_source') == 'manual' ? d : null),
+        // the amount equal to the card's price is not an exception
+        'monthly_amount': reset || !keepAmount || (a != null && (a - r.dbl('monthly_rate')).abs() < 0.005) ? null : a,
+        // the days equal to the calendar are not an exception
+        'working_days': reset || !keepDays || d == r.intv('calendar_days') ? null : d,
         'hourly_rate': reset ? null : (_hourlyTyped ? h : null),
       }));
       if (!mounted) return;
@@ -713,78 +753,71 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
     } catch (e) {
       if (mounted) {
         showError(context, e);
-        setState(() {
-          _days.text = r.str('divisor');
-          _hourly.text = _fmt(r.dbl('hourly'));
-        });
+        setState(_fill);
       }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
+  Widget _field(TextEditingController c, String label, String helper, {bool decimal = true, ValueChanged<String>? onChanged, bool enabled = true}) => SizedBox(
+        width: 170,
+        child: Focus(
+          onFocusChange: (f) { if (!f && enabled) _save(); },
+          child: TextField(
+            controller: c,
+            enabled: enabled && !_saving,
+            keyboardType: TextInputType.numberWithOptions(decimal: decimal),
+            onChanged: onChanged,
+            onSubmitted: (_) => _save(),
+            decoration: InputDecoration(labelText: label, isDense: true, helperText: helper, helperMaxLines: 2),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final r = widget.row;
     final cur = r.str('currency');
     final locked = r.flag('locked');
-    final manual = r.str('divisor_source') == 'manual' || r.str('hourly_source') == 'manual';
+    final exception = r.flag('is_exception');
     final ot = !r.flag('overtime_enabled')
-        ? 'off (extra hours not paid)'
+        ? 'off (extra hours not paid, kept to cover missing hours)'
         : r.dblOrNull('overtime_rate') != null
             ? 'paid at ${r.dbl('overtime_rate').toStringAsFixed(2)}'
-            : 'paid at ${r.dbl('hourly').toStringAsFixed(2)} (month price)';
-    final source = {'calendar': 'calendar', 'card': 'card: fixed', 'manual': 'typed'}[r.str('divisor_source')] ?? r.str('divisor_source');
+            : 'paid at the hourly price';
     return Container(
       margin: const EdgeInsets.only(top: 10),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: manual ? AppColors.edited.withValues(alpha: 0.06) : AppColors.surface,
+        color: exception ? AppColors.edited.withValues(alpha: 0.06) : AppColors.surface,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: manual ? AppColors.edited.withValues(alpha: 0.4) : AppColors.line),
+        border: Border.all(color: exception ? AppColors.edited.withValues(alpha: 0.4) : AppColors.line),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
           Expanded(child: Text('${r.str('label')}  ·  ${Fmt.monthLabel(r.str('month'))}', style: const TextStyle(fontWeight: FontWeight.w800))),
-          if (manual) const Padding(padding: EdgeInsets.only(right: 6), child: Pill('Typed by hand', color: AppColors.edited)),
-          if (locked) Pill('Locked by #${r.str('locked_by_batch_id')}', color: AppColors.navy, icon: Icons.lock_rounded),
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: exception ? const Pill('Exception for this month', color: AppColors.edited) : const Pill('Normal month', color: AppColors.working),
+          ),
+          if (locked) Pill('${r.flag('locked_by_finalized') ? 'Finalized' : 'Draft'} #${r.str('locked_by_batch_id')}', color: AppColors.navy, icon: Icons.lock_rounded),
         ]),
         const SizedBox(height: 4),
-        Text('Price ${Fmt.money2(r.strOrNull('monthly_rate'), cur)} · ${r.str('hours_per_day')} h per day · overtime: $ot',
+        Text('Card: ${Fmt.money2(r.strOrNull('monthly_rate'), cur)} per month · ${r.str('hours_per_day')} h per working day · '
+            '${r.str('calendar_days')} working days in ${Fmt.monthLabel(r.str('month'))} · overtime $ot',
             style: const TextStyle(fontSize: 12.5, color: AppColors.muted)),
         const SizedBox(height: 8),
         Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          SizedBox(
-            width: 150,
-            child: Focus(
-              onFocusChange: (f) { if (!f && !locked) _save(); },
-              child: TextField(
-                controller: _days,
-                enabled: !locked && !_saving,
-                keyboardType: TextInputType.number,
-                onChanged: _daysChanged,
-                onSubmitted: (_) => _save(),
-                decoration: InputDecoration(labelText: 'Working days (D)', isDense: true, helperText: 'calendar ${r.str('calendar_days')} · $source'),
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 150,
-            child: Focus(
-              onFocusChange: (f) { if (!f && !locked) _save(); },
-              child: TextField(
-                controller: _hourly,
-                enabled: !locked && !_saving,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (_) => _hourlyTyped = true,
-                onSubmitted: (_) => _save(),
-                decoration: InputDecoration(labelText: 'Hourly price', isDense: true, helperText: r.str('hourly_source') == 'manual' ? 'typed' : 'monthly / D / hours'),
-              ),
-            ),
-          ),
+          _field(_amount, 'Amount of the month ($cur)', r.str('amount_source') == 'manual' ? 'typed for this month' : 'the card\'s price',
+              enabled: !locked, onChanged: (_) => _recalc()),
+          _field(_days, 'Divided by (days)', r.str('divisor_source') == 'manual' ? 'typed (calendar ${r.str('calendar_days')})' : 'working days of the month',
+              decimal: false, enabled: !locked, onChanged: (_) => _recalc()),
+          _field(_hourly, 'Hourly price', r.str('hourly_source') == 'manual' ? 'typed' : 'amount / days / hours',
+              enabled: !locked, onChanged: (_) => _hourlyTyped = true),
           IconButton(
-            tooltip: 'Back to the card',
-            onPressed: locked || _saving || !manual ? null : () => _save(reset: true),
+            tooltip: 'Back to a normal month',
+            onPressed: locked || _saving || !exception ? null : () => _save(reset: true),
             icon: const Icon(Icons.restart_alt_rounded),
           ),
           if (_saving) const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
@@ -793,17 +826,23 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
         Text(
           r.intOrNull('deployed_working_days') == null
               ? 'Nothing of this month is left to bill in this period.'
-              : 'On site ${r.str('deployed_working_days')} working day(s) · due ${r.dbl('required_hours').toStringAsFixed(0)} h · '
-                  'done so far ${r.dbl('billable_hours_so_far').toStringAsFixed(2)} h → ${Fmt.money2(r.strOrNull('estimated_amount'), cur)}'
+              : 'On site ${r.str('deployed_working_days')} working day(s) · ${r.dbl('required_hours').toStringAsFixed(0)} h due · '
+                  'done so far ${r.dbl('billable_hours_so_far').toStringAsFixed(2)} h → about ${Fmt.money2(r.strOrNull('estimated_amount'), cur)}'
                   '${r.obj('already_billed').isEmpty ? '' : '  (part of the month: ${r.obj('already_billed').str('base_days')} base day(s) already billed)'}',
           style: const TextStyle(fontSize: 12.5),
         ),
-        if (locked)
-          const Padding(
-            padding: EdgeInsets.only(top: 4),
-            child: Text('A finalized batch billed this month: a difference now goes through an official Correction.',
-                style: TextStyle(fontSize: 12, color: AppColors.muted)),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            locked
+                ? (r.flag('locked_by_finalized')
+                    ? 'A finalized batch bills this month: undo its Finalize (then void it) to change the exception, or settle a difference with an official Correction.'
+                    : 'Draft #${r.str('locked_by_batch_id')} bills this month: void that draft first, change the exception, then generate again.')
+                : 'Examples: the vendor is paid the 27th day → amount = price x 27 / 26, divided by 27. A special price agreed for one month → type the amount. '
+                    'Leave everything as it is for a normal month.',
+            style: const TextStyle(fontSize: 12, color: AppColors.muted),
           ),
+        ),
       ]),
     );
   }
@@ -911,9 +950,15 @@ class _BlockersCard extends StatelessWidget {
 
 /// One machine line of a preview / batch with its calculation lines.
 class _ItemTile extends StatelessWidget {
-  const _ItemTile({required this.item, this.preview = false, this.onRows, this.onPdf, this.onFuelPdf, this.onCorrect});
+  const _ItemTile({required this.item, this.preview = false, this.onRows, this.onPdf, this.onFuelPdf, this.onCorrect,
+      this.offsetKeys = const <String>{}, this.onOffset, this.offsetNote});
   final Json item;
   final bool preview;
+  /// monthly machines: months ("<equipment_id>|YYYY-MM") whose extra hours cover missing hours (Admin decision)
+  final Set<String> offsetKeys;
+  /// the Admin may change the decision here (null: shown read-only with offsetNote)
+  final void Function(String key, bool on)? onOffset;
+  final String? offsetNote;
   final VoidCallback? onRows;
   /// finalized batch: official correction of money on this item (fuel, rate card, other)
   final VoidCallback? onCorrect;
@@ -973,7 +1018,7 @@ class _ItemTile extends StatelessWidget {
           ),
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
           children: [
-            for (final mo in (item.list('monthly_calc').isNotEmpty ? item.list('monthly_calc') : item.obj('rate_snapshot').list('monthly_calc')))
+            for (final mo in (item.list('monthly_calc').isNotEmpty ? item.list('monthly_calc') : item.obj('rate_snapshot').list('monthly_calc'))) ...[
               Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 8),
@@ -981,6 +1026,14 @@ class _ItemTile extends StatelessWidget {
                 decoration: BoxDecoration(color: AppColors.gold.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
                 child: Text(_monthText(mo, item.str('currency')), style: const TextStyle(fontSize: 12.5)),
               ),
+              if (mo.dbl('offset_possible_hours') > 0 || mo.dbl('offset_hours') != 0 || offsetKeys.contains('${item.str('equipment_id')}|${mo.str('month')}'))
+                _OffsetBox(
+                  mo: mo,
+                  on: offsetKeys.contains('${item.str('equipment_id')}|${mo.str('month')}'),
+                  note: offsetNote,
+                  onChanged: onOffset == null ? null : (v) => onOffset!('${item.str('equipment_id')}|${mo.str('month')}', v),
+                ),
+            ],
             Table(
               columnWidths: const {0: FlexColumnWidth(2.2), 1: FlexColumnWidth(1.2), 2: FlexColumnWidth(1.2), 3: FlexColumnWidth(1.4)},
               children: [
@@ -996,7 +1049,7 @@ class _ItemTile extends StatelessWidget {
                         child: Text('${_lineName(l.str('line_type'))}${l.strOrNull('note') == null ? '' : '\n${l.str('note')}'}', style: const TextStyle(fontSize: 13)),
                       ),
                       _Td('${Fmt.num2(l.dblOrNull('quantity'))} ${l.str('unit')}'),
-                      _Td(['FuelPriceDifference', 'Fuel', 'HoursShortfall', 'BreakdownDeduction', 'AbsenceDeduction', 'Overtime'].contains(l.str('line_type'))
+                      _Td(['FuelPriceDifference', 'Fuel', 'HoursShortfall', 'BreakdownDeduction', 'AbsenceDeduction', 'ExtraHoursOffset', 'Overtime'].contains(l.str('line_type'))
                           ? (l.dblOrNull('unit_price') ?? 0).toStringAsFixed(3)
                           : Fmt.num2(l.dblOrNull('unit_price'))),
                       _Td(Fmt.money(l.dblOrNull('amount'), cur), color: l.dbl('amount') < 0 ? AppColors.breakdown : AppColors.ink, bold: true),
@@ -1035,37 +1088,87 @@ class _ItemTile extends StatelessWidget {
   }
 }
 
-/// One month of a monthly machine (terms of 11 Oct 2026): D and its source, hourly price, base, hours, and the result —
-/// overtime paid (hours x price), extra hours not paid (overtime off), missing hours, or the settlement of a split month.
+/// "<equipment_id>|YYYY-MM" of the months whose extra hours cover missing hours (a list of strings in the batch).
+Set<String> _offsetKeysOf(Json b) => b['offset_months'] is List ? (b['offset_months'] as List).map((x) => '$x').toSet() : <String>{};
+
+/// The Admin's decision for one monthly machine and month: do its extra hours cover its missing hours? (12 Oct 2026)
+class _OffsetBox extends StatelessWidget {
+  const _OffsetBox({required this.mo, required this.on, this.onChanged, this.note});
+  final Json mo;
+  final bool on;
+  final ValueChanged<bool>? onChanged;
+  final String? note;
+
+  @override
+  Widget build(BuildContext context) {
+    String hh(double v) => v.toStringAsFixed(2).replaceFirst(RegExp(r'\.00$'), '');
+    final missing = mo.dbl('month_missing_hours');
+    final extra = mo.dbl('month_extra_hours');
+    final possible = mo.dbl('offset_possible_hours');
+    final ot = mo.flag('overtime_paid');
+    final explain = 'This month: ${hh(missing)} h missing, ${hh(extra)} h extra'
+        '${possible > 0 ? ' (${hh(possible)} h can cover missing hours now)' : ''}. '
+        'On: each extra hour covers one missing hour (paid back at the hourly price), and is not paid as overtime. '
+        'Off: the missing hours stay deducted and the extra hours are ${ot ? 'paid as overtime' : 'not paid (overtime off) but kept: they can still cover missing hours in a later invoice of this month'}. '
+        'Breakdowns are never covered.';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+      decoration: BoxDecoration(
+        color: (on ? AppColors.working : AppColors.info).withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: (on ? AppColors.working : AppColors.info).withValues(alpha: 0.35)),
+      ),
+      child: onChanged != null
+          ? SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: on,
+              onChanged: onChanged,
+              title: Text('${Fmt.monthLabel(mo.str('month'))}: use the extra hours to cover the missing hours?', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+              subtitle: Text(explain, style: const TextStyle(fontSize: 12.5)),
+            )
+          : Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Text('${Fmt.monthLabel(mo.str('month'))}: extra hours ${on ? 'COVER the missing hours (Admin decision)' : 'do NOT cover the missing hours'}',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+                const SizedBox(height: 2),
+                Text('$explain${note == null ? '' : '\n$note'}', style: const TextStyle(fontSize: 12.5)),
+              ]),
+            ),
+    );
+  }
+}
+
+/// One month of a monthly machine (rules of 12 Oct 2026), in plain words: the terms (normal month or exception), what
+/// is deducted, the extra hours and what was done with them.
 String _monthText(Json mo, String cur) {
   final d = mo.strOrNull('divisor') ?? mo.str('working_days');
-  final src = const {'calendar': 'calendar', 'card': 'card', 'manual': 'typed'}[mo.str('divisor_source', 'calendar')] ?? mo.str('divisor_source');
   final h = mo.dbl('hourly_price');
-  final ot = mo.dbl('overtime_hours');
-  final miss = mo.dbl('missing_hours');
-  final unpaid = mo.dbl('unpaid_extra_hours');
-  final price = mo.dblOrNull('overtime_price') ?? h;
-  final bd = mo.dbl('breakdown_deducted_hours');
-  final ab = mo.dbl('absence_deducted_hours');
-  final bdText = '${bd > 0 ? 'breakdown -${bd.toStringAsFixed(2)} h deducted; ' : ''}'
-      '${ab > 0 ? 'absent ${mo.intv('absent_days')} day(s) -${ab.toStringAsFixed(2)} h deducted; ' : ''}';
-  final result = ot > 0
-      ? '+${ot.toStringAsFixed(2)} h x ${price.toStringAsFixed(2)} = ${Fmt.money(ot * price, cur)}'
-      : ot < 0
-          ? '${ot.toStringAsFixed(2)} h overtime (month settlement)'
-          : unpaid > 0
-              ? '+${unpaid.toStringAsFixed(2)} h not paid (overtime off)'
-              : miss > 0
-                  ? '-${miss.toStringAsFixed(2)} h missing'
-                  : miss < 0
-                      ? '${(-miss).toStringAsFixed(2)} h missing given back (month settlement)'
-                      : 'hours complete';
-  final before = mo.obj('billed_before');
-  return '${Fmt.monthLabel(mo.str('month'))}: ${mo.str('deployed_working_days')} working day(s) on site, divided by $d ($src), '
-      'hourly price ${h.toStringAsFixed(3)}${mo.str('hourly_source') == 'manual' ? ' (typed)' : ''}'
-      '${mo.intv('holiday_days') > 0 ? ', ${mo.str('holiday_days')} holiday(s)' : ''}  ·  '
-      '${mo.dbl('required_hours').toStringAsFixed(2)} h due, ${mo.dbl('billable_hours').toStringAsFixed(2)} h done  ·  $bdText$result'
-      '${before.isEmpty ? '' : '  ·  already billed before: ${before.str('base_days')} base day(s), ${before.dbl('billable_hours').toStringAsFixed(2)} h'}';
+  String hh(double v) => v.toStringAsFixed(2).replaceFirst(RegExp(r'\.00$'), '');
+  final exception = [
+    if (mo.str('amount_source') == 'manual') 'amount ${Fmt.money(mo.dbl('amount'), cur)} (typed)',
+    if (mo.str('divisor_source', 'calendar') != 'calendar') 'divided by $d days (typed)',
+    if (mo.str('hourly_source') == 'manual') 'hourly price typed',
+  ];
+  final deducted = [
+    if (mo.dbl('absence_deducted_hours') != 0) 'absent ${mo.intv('absent_days')} day(s) −${hh(mo.dbl('absence_deducted_hours'))} h',
+    if (mo.dbl('missing_hours') != 0) 'days below the hours due −${hh(mo.dbl('missing_hours'))} h',
+    if (mo.dbl('breakdown_deducted_hours') != 0) 'breakdown −${hh(mo.dbl('breakdown_deducted_hours'))} h',
+  ];
+  final extra = mo.dbl('month_extra_hours');
+  final used = [
+    if (mo.dbl('offset_hours') != 0) '${hh(mo.dbl('offset_hours'))} h cover missing hours',
+    if (mo.dbl('overtime_hours') != 0) '${hh(mo.dbl('overtime_hours'))} h paid as overtime x ${(mo.dblOrNull('overtime_price') ?? h).toStringAsFixed(2)}',
+    if (mo.dbl('unpaid_extra_hours') > 0) '${hh(mo.dbl('unpaid_extra_hours'))} h kept unpaid (overtime off) — they can still cover missing hours later this month',
+  ];
+  final before = mo.obj('used_before');
+  return '${Fmt.monthLabel(mo.str('month'))}: ${exception.isEmpty ? 'normal month' : 'EXCEPTION: ${exception.join(', ')}'} · '
+      '${mo.str('deployed_working_days')} working day(s) on site, divided by $d → hourly price ${h.toStringAsFixed(3)} · ${mo.str('hours_per_day')} h due each day\n'
+      'Deducted: ${deducted.isEmpty ? 'nothing' : deducted.join(', ')}\n'
+      'Extra hours this month: ${hh(extra)} h${used.isEmpty ? '' : ' → ${used.join('; ')}'}'
+      '${before.isEmpty || (before.dbl('offset_hours') == 0 && before.dbl('overtime_hours') == 0) ? '' : '\nEarlier invoices of this month already used ${hh(before.dbl('offset_hours'))} h as cover and ${hh(before.dbl('overtime_hours'))} h as overtime'}';
 }
 
 String _lineName(String t) {
@@ -1082,9 +1185,10 @@ String _lineName(String t) {
     'AbsenceDeduction': 'Absence deduction',
     'BreakdownDeduction': 'Breakdown deduction',
     'FuelPriceDifference': 'Fuel price difference',
-    'HoursShortfall': 'Missing hours (below the monthly hours due)',
+    'HoursShortfall': 'Missing hours (days below the hours due)',
     'SecondShift': 'Second shift the same day',
     'DeliveryNote': 'Delivery note (DNR)',
+    'ExtraHoursOffset': 'Extra hours covering missing hours (Admin decision)',
   };
   return names[t] ?? t.replaceAllMapped(RegExp(r'(?<=[a-z])([A-Z])'), (m) => ' ${m[1]!.toLowerCase()}');
 }
@@ -1681,11 +1785,29 @@ class _BatchScreenState extends State<BatchScreen> {
     }
   }
 
-  void _pdf(String view, {int? vendorId, int? equipmentId, String suffix = ''}) {
+  /// Vendor and machine invoices go to the vendor: the office first chooses what is printed (explanations, internal
+  /// details); the money lines and totals always stay. Summary and fuel statements print in full.
+  Future<void> _pdf(String view, {int? vendorId, int? equipmentId, String suffix = ''}) async {
+    Set<String> hide = {};
+    if (view == 'vendor' || view == 'machine') {
+      final r = await askPdfContent(context);
+      if (r == null || !mounted) return;
+      hide = r;
+    }
     PdfViewScreen.open(context,
         title: 'Batch #${widget.id} ${view == 'summary' ? 'summary' : suffix}',
         fileName: 'payroll-${widget.id}-$view${suffix.isEmpty ? '' : '-$suffix'}.pdf',
-        load: () => Api.I.getBytes('/equipment/payroll/batches/${widget.id}/export.pdf', query: {'view': view, 'vendor_id': vendorId, 'equipment_id': equipmentId}));
+        load: () => Api.I.getBytes('/equipment/payroll/batches/${widget.id}/export.pdf',
+            query: {'view': view, 'vendor_id': vendorId, 'equipment_id': equipmentId, if (hide.isNotEmpty) 'hide': (hide.toList()..sort()).join(',')}));
+  }
+
+  /// Admin, draft only: extra hours of a monthly machine cover its missing hours (or not). The draft becomes a new version.
+  Future<void> _setOffset(String key, bool on) async {
+    final now = _offsetKeysOf(_b!);
+    on ? now.add(key) : now.remove(key);
+    await _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/offsets', {'offsets': now.toList()..sort()}),
+        on ? 'Extra hours now cover the missing hours (new version).' : 'Extra hours no longer cover the missing hours (new version).',
+        reloadOther: true);
   }
 
   Future<void> _vendorPdf() async {
@@ -1922,6 +2044,9 @@ class _BatchScreenState extends State<BatchScreen> {
           for (final it in b.list('items'))
             _ItemTile(
               item: {...it, 'currency': cur},
+              offsetKeys: _offsetKeysOf(b),
+              onOffset: draft && Auth.I.isAdmin && !_busy ? _setOffset : null,
+              offsetNote: draft ? (Auth.I.isAdmin ? null : 'Only the Admin decides this, before finalizing.') : 'Decided before the Finalize; a difference now goes through an official Correction.',
               onRows: it.str('billing_mode') == 'DNR' ? null : () => _rows(it),
               onPdf: () => _pdf('machine', equipmentId: it.intv('equipment_id'), suffix: it.str('equipment_code')),
               onFuelPdf: (it.dblOrNull('fuel_difference') ?? 0) == 0 ? null : () => _pdf('fueldiff', equipmentId: it.intv('equipment_id'), suffix: 'fuel-${it.str('equipment_code')}'),

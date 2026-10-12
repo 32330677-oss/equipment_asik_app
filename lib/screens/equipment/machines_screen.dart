@@ -8,6 +8,7 @@ import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/lookups.dart';
+import '../../widgets/pdf_content.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/statement_period.dart';
 import '../../widgets/ui.dart';
@@ -431,10 +432,12 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
     ]);
     if (which == null || !mounted) return;
     final withUnapproved = which.value == true;
+    final hide = await askPdfContent(context);
+    if (hide == null || !mounted) return;
     PdfViewScreen.open(context,
         title: 'Statement ${_m!.str('equipment_code')}${withUnapproved ? ' (incl. not approved)' : ''}',
         fileName: 'statement-${_m!.str('equipment_code')}-$from-$to${withUnapproved ? '-not-approved' : ''}.pdf',
-        load: () => Api.I.getBytes('/equipment/statements/machine/${widget.id}.pdf', query: {'from': from, 'to': to, if (withUnapproved) 'include_unapproved': 'true'}));
+        load: () => Api.I.getBytes('/equipment/statements/machine/${widget.id}.pdf', query: {'from': from, 'to': to, if (withUnapproved) 'include_unapproved': 'true', if (hide.isNotEmpty) 'hide': (hide.toList()..sort()).join(',')}));
   }
 
   /// Running statement: billing history (since the start, this year or chosen dates).

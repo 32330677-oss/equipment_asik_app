@@ -55,6 +55,7 @@ class _ClientReportScreenState extends State<ClientReportScreen> {
   String _date = Fmt.today();
   late String _shift = widget.shift ?? 'All';
   bool _standby = false; // show Standby machines and stoppages (our own idle time) to the reader
+  bool _remarks = false; // print the supervisors' remarks (internal notes) for machines not working
   List<PickOption>? _sites;
   Object? _sitesError;
   final Set<int> _selected = {}; // empty = every active site
@@ -141,6 +142,7 @@ class _ClientReportScreenState extends State<ClientReportScreen> {
       'issued_title': _title.text.trim(),
       'notes': notes.isEmpty ? null : jsonEncode(notes),
       'include_standby': _standby ? 'true' : 'false',
+      'include_remarks': _remarks ? 'true' : 'false',
     };
     if (!mounted) return;
     await PdfViewScreen.open(context,
@@ -249,14 +251,25 @@ class _ClientReportScreenState extends State<ClientReportScreen> {
       const SizedBox(height: 12),
       SectionCard(
         title: 'Content',
-        child: SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          value: _standby,
-          onChanged: (v) => setState(() => _standby = v),
-          title: const Text('Show Standby machines'),
-          subtitle: const Text('Machines ready on site that we did not use, and Standby stoppages. Off: they are left out of the report.',
-              style: TextStyle(color: AppColors.muted, fontSize: 12)),
-        ),
+        child: Column(children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _standby,
+            onChanged: (v) => setState(() => _standby = v),
+            title: const Text('Show Standby machines'),
+            subtitle: const Text('Machines ready on site that we did not use, and Standby stoppages. Off: they are left out of the report.',
+                style: TextStyle(color: AppColors.muted, fontSize: 12)),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _remarks,
+            onChanged: (v) => setState(() => _remarks = v),
+            title: const Text('Show the supervisors\' remarks'),
+            subtitle: const Text('The remarks typed on a day that did not work (absent, breakdown...) are internal notes. '
+                'Off: they are not printed; a stoppage keeps its own reason. Turn on only after checking them.',
+                style: TextStyle(color: AppColors.muted, fontSize: 12)),
+          ),
+        ]),
       ),
       const SizedBox(height: 12),
       SectionCard(

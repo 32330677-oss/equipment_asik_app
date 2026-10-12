@@ -61,8 +61,6 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
   bool _ot = false;
   // Monthly (11 Oct 2026): pay overtime or not (default ON for a new card), and what the monthly price is divided by
   bool _monthlyOt = true;
-  String _divisor = 'MonthDays';
-  final _fixedDays = TextEditingController(text: '26');
   final _otThreshold = TextEditingController();
   final _otRate = TextEditingController();
   final _otMult = TextEditingController(text: '1');
@@ -125,8 +123,6 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       _stdHours.text = t('standard_hours_per_day');
       _ot = c.flag('overtime_enabled');
       _monthlyOt = c.flag('overtime_enabled');
-      _divisor = c.str('monthly_divisor', 'MonthDays');
-      if (t('monthly_working_days').isNotEmpty) _fixedDays.text = t('monthly_working_days');
       _otThreshold.text = t('overtime_threshold_hours');
       _otRate.text = t('overtime_rate');
       _otMult.text = t('overtime_multiplier');
@@ -209,8 +205,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       'overtime_threshold_hours': _mode != 'Monthly' && _ot ? numOrNull(_otThreshold) : null,
       'overtime_rate': (_mode == 'Monthly' && _monthlyOt) || (_mode != 'Monthly' && _ot) ? numOrNull(_otRate) : null,
       // Monthly: the price is divided by the working days of the actual month, or by a fixed number of days (e.g. 26)
-      'monthly_divisor': _mode == 'Monthly' ? _divisor : null,
-      'monthly_working_days': _mode == 'Monthly' && _divisor == 'Fixed' ? int.tryParse(_fixedDays.text.trim()) : null,
+      'monthly_divisor': _mode == 'Monthly' ? 'MonthDays' : null,
       'overtime_multiplier': _mode != 'Monthly' && _ot ? numOrNull(_otMult) : null,
       'standby_billable_pct': numOrNull(_standbyPct),
       'breakdown_billable_pct': numOrNull(_breakdownPct),
@@ -431,13 +426,6 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               if (_mode == 'Daily') textField(_daily, 'Price per day', number: true, required: true),
               if (_mode == 'Monthly') textField(_monthly, 'Price per month', number: true, required: true),
               textField(_stdHours, _mode == 'Monthly' ? 'Working hours per day at the site' : 'Standard hours per day', number: true, required: true, suffix: 'h'),
-              if (_mode == 'Monthly')
-                Dropdown<String>(label: 'Divide the monthly price by', value: _divisor, width: null, items: const [
-                  DropdownMenuItem(value: 'MonthDays', child: Text('The working days of the actual month')),
-                  DropdownMenuItem(value: 'Fixed', child: Text('A fixed number of days')),
-                ], onChanged: (v) => setState(() => _divisor = v ?? _divisor)),
-              if (_mode == 'Monthly' && _divisor == 'Fixed')
-                textField(_fixedDays, 'Fixed number of days', number: true, decimal: false, required: true, hint: 'e.g. 26'),
               if (_mode == 'Daily')
                 Dropdown<String>(label: 'Partial day', value: _partial, width: null, items: const [
                   DropdownMenuItem(value: 'ProRata', child: Text('Pro rata of the hours')),
@@ -452,9 +440,11 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               ? 'DNR = Delivery Note Registry: the vendor is paid per unit written on each delivery note (per trip, per ton...). '
                   'It does not replace the time rate card: the same machine can be paid by the hour for one job and per trip for another.'
               : _mode == 'Monthly'
-                  ? 'D = ${_divisor == 'Fixed' ? 'the fixed number of days' : 'the working days of the month (days minus Fridays)'}; it can also be typed per month on New payroll. '
-                      'Hourly price = monthly price / D / hours per day. Hours due = deployed working days (at most D) x hours per day. '
-                      'All hours done = full month; fewer = missing hours deducted; more = overtime, only if "Pay overtime" is on.'
+                  ? 'A normal month: the vendor gets the monthly price whatever the number of working days (24, 26 or 27). '
+                      'Hourly price = monthly price / working days of the month (days minus Fridays) / hours per day. '
+                      'Every working day is due its hours on its own: missing hours are deducted; extra hours are overtime (if "Pay overtime" is on) '
+                      'or, if the Admin decides it on the payroll, cover missing hours. '
+                      'A month billed differently (e.g. the vendor is paid the 27th day) gets an EXCEPTION for that machine and month on New payroll.'
                   : null),
           if (_mode == 'Monthly') _section('Overtime', [
             SwitchListTile(
@@ -656,10 +646,10 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(color: AppColors.gold.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
                 child: Text(
-                  '${mo.str('month')}: D = ${mo.str('divisor', mo.str('working_days'))} (${mo.str('divisor_source', 'calendar')}; calendar ${mo.str('working_days')}) · '
-                  '${mo.str('base_days', mo.str('deployed_working_days'))} base days x ${mo.str('hours_per_day')} h = ${mo.dbl('required_hours').toStringAsFixed(2)} h due · '
-                  'done ${mo.dbl('billable_hours').toStringAsFixed(2)} h · hourly price H ${mo.dbl('hourly_price').toStringAsFixed(3)} · '
-                  '${mo.dbl('unpaid_extra_hours') > 0 ? '+${mo.dbl('unpaid_extra_hours').toStringAsFixed(2)} h NOT paid (overtime off)' : mo.flag('overtime_paid') ? 'overtime paid' : 'overtime off'}',
+                  '${mo.str('month')}: divided by ${mo.str('divisor', mo.str('working_days'))} working days · hourly price ${mo.dbl('hourly_price').toStringAsFixed(3)} · '
+                  'missing ${mo.dbl('month_missing_hours').toStringAsFixed(2)} h · extra ${mo.dbl('month_extra_hours').toStringAsFixed(2)} h · '
+                  '${mo.dbl('offset_hours') > 0 ? 'extra hours covering missing hours ${mo.dbl('offset_hours').toStringAsFixed(2)} h · ' : ''}'
+                  '${mo.dbl('overtime_hours') > 0 ? 'overtime ${mo.dbl('overtime_hours').toStringAsFixed(2)} h' : mo.dbl('unpaid_extra_hours') > 0 ? '${mo.dbl('unpaid_extra_hours').toStringAsFixed(2)} extra h NOT paid (overtime off)' : 'no overtime'}',
                   style: const TextStyle(fontSize: 12.5),
                 ),
               ),

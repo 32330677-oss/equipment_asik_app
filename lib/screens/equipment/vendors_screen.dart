@@ -524,7 +524,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
       },
       body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const Text('Money still owed to this vendor from BEFORE the system (after the payments already made). '
-            'Tick "Add previous balances" on the next New payroll: it is added on its own line, paid with normal payment vouchers, '
+            'Tick "Add previous balances" on the next New invoice batch: it is added on its own line, paid with normal payment vouchers, '
             'and the invoice of the new period is not changed.',
             style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
         const SizedBox(height: 12),
@@ -571,7 +571,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
   Widget _openingCard() {
     Color stateColor(String s) => s == 'Open' ? AppColors.breakdown : s == 'Carried' ? AppColors.working : AppColors.neutral;
     String stateText(Json o) => switch (o.str('state')) {
-          'Open' => 'Waiting for the next payroll',
+          'Open' => 'Waiting for the next invoice',
           'Carried' => 'In batch #${o.str('carried_to_batch_id')} (${o.str('carried_to_batch_state')})',
           _ => 'Cancelled',
         };
@@ -592,7 +592,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
                     color: AppColors.edited,
                     icon: Icons.info_outline_rounded,
                     text: 'Still to carry: ${open.entries.map((e) => Fmt.money(e.value, e.key)).join(' + ')}. '
-                        'Tick "Add previous balances" on the next New payroll of this vendor.',
+                        'Tick "Add previous balances" on the next New invoice batch of this vendor.',
                   ),
                 ),
               for (final o in _opening)

@@ -147,7 +147,7 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
 
   Future<void> _cancel(Json r) async {
     final reason = await promptText(context, 'Cancel fuel issue', label: 'Reason', confirm: 'Cancel issue', minLength: 5,
-        help: 'The issue is kept (marked cancelled). A draft payroll batch that uses it becomes out of date.');
+        help: 'The issue is kept (marked cancelled). A draft invoice batch that uses it becomes out of date.');
     if (reason == null) return;
     try {
       await Api.I.patch('/equipment/fuel-issues/${r.intv('fuel_issue_id')}/cancel', {'reason': reason});
@@ -346,7 +346,7 @@ class _AdjustmentsTabState extends State<_AdjustmentsTab> with AutomaticKeepAliv
 
   Future<void> _cancel(Json r) async {
     final reason = await promptText(context, 'Cancel adjustment', label: 'Reason', confirm: 'Cancel adjustment', minLength: 5,
-        help: r.intOrNull('in_batch_id') == null ? null : 'Draft payroll batch #${r.str('in_batch_id')} uses it: that batch becomes out of date.');
+        help: r.intOrNull('in_batch_id') == null ? null : 'Draft invoice batch #${r.str('in_batch_id')} uses it: that batch becomes out of date.');
     if (reason == null) return;
     try {
       await Api.I.patch('/equipment/adjustments/${r.intv('adjustment_id')}/cancel', {'reason': reason});
@@ -365,7 +365,7 @@ class _AdjustmentsTabState extends State<_AdjustmentsTab> with AutomaticKeepAliv
       byCur[r.str('currency')] = (byCur[r.str('currency')] ?? 0) + r.dbl('amount');
     }
     return PageBody(onRefresh: _load, children: [
-      PageHeader(title: 'Adjustments', subtitle: 'Mobilization, bonuses, penalties, damages... added to the next payroll of the machine', actions: [
+      PageHeader(title: 'Adjustments', subtitle: 'Mobilization, bonuses, penalties, damages... added to the next invoice of the machine', actions: [
         Dropdown<String?>(label: 'Status', value: _status, width: 140, items: const [
           DropdownMenuItem(value: null, child: Text('All')),
           DropdownMenuItem(value: 'Active', child: Text('Active')),
@@ -644,7 +644,7 @@ class _CorrectionsTabState extends State<_CorrectionsTab> with AutomaticKeepAliv
     return PageBody(onRefresh: _load, maxWidth: 1100, children: [
       PageHeader(
           title: 'Corrections',
-          subtitle: 'Changes to money already in a finalized or paid payroll. An Admin applies a correction at once; '
+          subtitle: 'Changes to money already in a finalized or paid invoice. An Admin applies a correction at once; '
               'an Accountant sends it to an Admin for approval. Approval issues a debit / credit note in the first open period.',
           actions: [
             Dropdown<String?>(label: 'Status', value: _status, width: 220, items: [
@@ -827,10 +827,10 @@ class _FuelPricesTabState extends State<_FuelPricesTab> with AutomaticKeepAliveC
 
   Future<void> _delete(Json p) async {
     final reason = await promptText(context, 'Delete this price?',
-        label: 'Reason (required when a draft payroll uses this price)',
+        label: 'Reason (required when a draft invoice uses this price)',
         required: false,
         confirm: 'Delete',
-        help: '${p.str('currency')} ${p.str('price_per_liter')} from ${Fmt.date(p.str('effective_from'))}. A price used by a finalized payroll cannot be deleted.');
+        help: '${p.str('currency')} ${p.str('price_per_liter')} from ${Fmt.date(p.str('effective_from'))}. A price used by a finalized invoice cannot be deleted.');
     if (reason == null) return;
     try {
       await Api.I.delete('/equipment/fuel-prices/${p.intv('fuel_price_id')}', {if (reason.isNotEmpty) 'reason': reason});
@@ -855,7 +855,7 @@ class _FuelPricesTabState extends State<_FuelPricesTab> with AutomaticKeepAliveC
         ErrorView(error: _s.error!, onRetry: _load)
       else
         TableCard(
-          empty: 'No price yet. Add the official price before generating a payroll with a fuel difference.',
+          empty: 'No price yet. Add the official price before generating an invoice with a fuel difference.',
           columns: const [
             DataColumn(label: Text('Currency')), DataColumn(label: Text('Valid from')), DataColumn(label: Text('Until')),
             DataColumn(label: Text('Price / L'), numeric: true), DataColumn(label: Text('Note')), DataColumn(label: Text('By')), DataColumn(label: Text('')),

@@ -106,7 +106,7 @@ class _DeliveryNotesScreenState extends State<DeliveryNotesScreen> {
       children: [
         PageHeader(
           title: widget.machine == null ? 'Delivery notes (DNR)' : 'Delivery notes of ${widget.machine!.machineName}',
-          subtitle: 'Paid per unit (trip, ton, m³...) at the DNR price of the vendor. Each note is paid once, in the payroll of its date.',
+          subtitle: 'Paid per unit (trip, ton, m³...) at the DNR price of the vendor. Each note is paid once, in the invoice of its date.',
           actions: [
             DateField(label: 'From', value: _from, width: 150, onChanged: (v) { _from = v ?? _from; _load(); }),
             DateField(label: 'To', value: _to, width: 150, onChanged: (v) { _to = v ?? _to; _load(); }),
@@ -133,7 +133,7 @@ class _DeliveryNotesScreenState extends State<DeliveryNotesScreen> {
         ),
         Wrap(spacing: 12, runSpacing: 12, children: [
           KpiTile(label: 'Delivery notes', value: '${active.length}', icon: Icons.receipt_rounded),
-          KpiTile(label: 'Not in a payroll yet', value: '$notBilled', color: notBilled == 0 ? AppColors.working : AppColors.standby, icon: Icons.pending_actions_rounded),
+          KpiTile(label: 'Not in an invoice yet', value: '$notBilled', color: notBilled == 0 ? AppColors.working : AppColors.standby, icon: Icons.pending_actions_rounded),
           for (final e in totals.entries)
             KpiTile(label: 'Total (${e.key})', value: Fmt.money(e.value, e.key), color: AppColors.navy, icon: Icons.local_shipping_rounded, width: 220),
         ]),
@@ -148,7 +148,7 @@ class _DeliveryNotesScreenState extends State<DeliveryNotesScreen> {
             columns: const [
               DataColumn(label: Text('DN no.')), DataColumn(label: Text('Date')), DataColumn(label: Text('Machine')), DataColumn(label: Text('Vendor')),
               DataColumn(label: Text('Site')), DataColumn(label: Text('Item')), DataColumn(label: Text('Qty'), numeric: true),
-              DataColumn(label: Text('Unit price'), numeric: true), DataColumn(label: Text('Amount'), numeric: true), DataColumn(label: Text('Payroll')),
+              DataColumn(label: Text('Unit price'), numeric: true), DataColumn(label: Text('Amount'), numeric: true), DataColumn(label: Text('Invoice')),
               DataColumn(label: Text('')),
             ],
             rows: [

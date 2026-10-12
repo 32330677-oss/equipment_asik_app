@@ -15,7 +15,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _s = Loadable<List<Json>>();
 
   static const _groups = <String, List<String>>{
-    'Paper sheets & payroll': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_finalize_requires_scan', 'eq_finalize_undo_hours', 'eq_paid_undo_hours', 'eq_default_currency'],
+    'Paper sheets & invoices': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_finalize_requires_scan', 'eq_finalize_undo_hours', 'eq_paid_undo_hours', 'eq_default_currency'],
     'Billing rules': ['eq_weekly_off_day', 'eq_fuel_diff_allow_negative', 'eq_block_monthly_days_without_rows'],
     'Attendance checks': ['eq_meter_tolerance_pct', 'eq_long_session_review_hours', 'eq_late_entry_days', 'week_gate_enabled', 'week_start_day', 'eq_shift_continuity_minutes'],
     'General': ['company_name', 'app_time_zone', 'eq_live_refresh_seconds'],
@@ -40,7 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'eq_paid_undo_hours': 'Hours to undo "Mark paid" (0 = never)',
     'eq_finalize_undo_hours': 'Hours to undo "Finalize" with the same invoice numbers (0 = never)',
     'eq_late_entry_days': 'Late entry after (days)',
-    'eq_block_monthly_days_without_rows': 'Monthly machines: days without a row block the payroll (generate only with a reason)',
+    'eq_block_monthly_days_without_rows': 'Monthly machines: days without a row block the invoice (generate only with a reason)',
   };
   static const _days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -65,7 +65,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     String? reason;
     if (setting != null && setting.flag('reason_required')) {
       reason = await promptText(context, 'Why change "${_titles[key] ?? key}"?',
-          label: 'Reason (kept in the audit log)', minLength: 5, help: 'This setting changes payroll or permissions.');
+          label: 'Reason (kept in the audit log)', minLength: 5, help: 'This setting changes invoices or permissions.');
       if (reason == null) {
         _load(); // put the switch / dropdown back
         return;
@@ -120,7 +120,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onRefresh: _load,
       maxWidth: 900,
       children: [
-        const PageHeader(title: 'Settings', subtitle: 'Rules used by attendance, paper sheets and payroll. Every change is audited.'),
+        const PageHeader(title: 'Settings', subtitle: 'Rules used by attendance, paper sheets and invoices. Every change is audited.'),
         if (_s.loading && _s.data == null) const LoadingView()
         else if (_s.error != null) ErrorView(error: _s.error!, onRetry: _load)
         else

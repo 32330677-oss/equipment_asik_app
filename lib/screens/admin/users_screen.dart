@@ -234,7 +234,7 @@ class _UserDialogState extends State<_UserDialog> {
               label: 'Role', value: _role, width: null,
               items: const [
                 DropdownMenuItem(value: 'Supervisor', child: Text('Supervisor - records machines on his sites')),
-                DropdownMenuItem(value: 'Accountant', child: Text('Accountant - paper, fuel, payroll')),
+                DropdownMenuItem(value: 'Accountant', child: Text('Accountant - paper, fuel, invoices')),
                 DropdownMenuItem(value: 'Admin', child: Text('Admin - everything')),
               ],
               onChanged: (v) => setState(() => _role = v ?? _role),

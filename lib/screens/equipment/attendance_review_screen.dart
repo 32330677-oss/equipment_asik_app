@@ -398,7 +398,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
       final stale = r.intOrNull('generated_batch_id') != null;
       final notes = [
         if (approved) 'The row stays Approved and is marked as edited after approval.',
-        if (stale) 'Draft payroll batch #${r.str('generated_batch_id')} uses this row: it becomes out of date and must be regenerated.',
+        if (stale) 'Draft invoice batch #${r.str('generated_batch_id')} uses this row: it becomes out of date and must be regenerated.',
       ];
       final reason = await promptText(context, approved ? 'Why change an approved row? (optional)' : 'Reason (optional)',
           label: 'Reason (optional)', required: false, help: notes.isEmpty ? null : notes.join(' '));
@@ -555,7 +555,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         required: false,
         confirm: 'Void the row',
         help: 'The row is kept in the history as Cancelled and is not paid.'
-            '${r.intOrNull('generated_batch_id') == null ? '' : ' Draft payroll batch #${r.str('generated_batch_id')} becomes out of date.'}');
+            '${r.intOrNull('generated_batch_id') == null ? '' : ' Draft invoice batch #${r.str('generated_batch_id')} becomes out of date.'}');
     if (reason == null) return;
     await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}/cancel', {if (reason.trim().isNotEmpty) 'reason': reason.trim()}),
         'Row voided (kept as Cancelled).');
@@ -683,7 +683,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text(r.intOrNull('standby_credit_minutes') == null
-                                  ? 'Monthly machine with standby: decide how many hours to pay (needed before payroll).'
+                                  ? 'Monthly machine with standby: decide how many hours to pay (needed before invoicing).'
                                   : 'Standby hours paid: ${Fmt.hoursFromMinutes(r.intv('standby_credit_minutes'))} h${r.strOrNull('standby_credit_note') == null ? '' : ' - ${r.str('standby_credit_note')}'}'),
                             ),
                             TextButton(onPressed: _standbyHours, child: Text(r.intOrNull('standby_credit_minutes') == null ? 'Set hours' : 'Change')),
@@ -698,7 +698,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                       if (!_locked && r.intOrNull('generated_batch_id') != null)
                         NoticeBox(
                           icon: Icons.receipt_long_rounded,
-                          text: 'Used by draft payroll batch #${r.str('generated_batch_id')} (not finalized). A change here makes that batch out of date: regenerate it before finalizing.',
+                          text: 'Used by draft invoice batch #${r.str('generated_batch_id')} (not finalized). A change here makes that batch out of date: regenerate it before finalizing.',
                         ),
                       if (_locked)
                         NoticeBox(
@@ -757,7 +757,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                                   for (final line in changedFieldLines(h['changed_fields']))
                                     Text(line, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
                                   if ((h.strOrNull('payroll_effect') ?? 'none') != 'none')
-                                    Text('Payroll: ${h.str('payroll_effect').replaceFirst('stale:', 'draft batch #').replaceFirst('correction:', 'correction #')}',
+                                    Text('Invoice: ${h.str('payroll_effect').replaceFirst('stale:', 'draft batch #').replaceFirst('correction:', 'correction #')}',
                                         style: const TextStyle(fontSize: 12, color: AppColors.info)),
                                 ]),
                               ),

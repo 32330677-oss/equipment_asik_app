@@ -146,7 +146,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
     return PageBody(
       onRefresh: _load,
       children: [
-        PageHeader(title: 'Payroll', subtitle: 'Vendor statements per machine, from approved attendance', actions: [
+        PageHeader(title: 'Invoices', subtitle: 'Vendor statements per machine, from approved attendance', actions: [
           Dropdown<String?>(label: 'Status', value: _status, width: 160, items: const [
             DropdownMenuItem(value: null, child: Text('All')),
             DropdownMenuItem(value: 'Generated', child: Text('Draft / finalized')),
@@ -154,7 +154,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
             DropdownMenuItem(value: 'Superseded', child: Text('Superseded')),
             DropdownMenuItem(value: 'Voided', child: Text('Voided')),
           ], onChanged: (v) { _status = v; _load(); }),
-          FilledButton.icon(onPressed: _new, icon: const Icon(Icons.add_rounded), label: const Text('New payroll')),
+          FilledButton.icon(onPressed: _new, icon: const Icon(Icons.add_rounded), label: const Text('New invoice batch')),
         ]),
         Wrap(spacing: 12, runSpacing: 12, children: [
           KpiTile(label: 'Batches', value: '${rows.length}', icon: Icons.folder_copy_rounded),
@@ -170,7 +170,7 @@ class _PayrollScreenState extends State<PayrollScreen> {
           ErrorView(error: _s.error!, onRetry: _load)
         else
           TableCard(
-            empty: 'No payroll batch yet. Use "New payroll" to calculate one.',
+            empty: 'No invoice batch yet. Use "New invoice batch" to calculate one.',
             columns: const [
               DataColumn(label: Text('#')), DataColumn(label: Text('Period')), DataColumn(label: Text('Scope')),
               DataColumn(label: Text('Status')), DataColumn(label: Text('Ver.'), numeric: true), DataColumn(label: Text('Machines'), numeric: true),
@@ -448,7 +448,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     final warnings = p == null ? <Json>[] : p.list('warnings');
     var step = 1;
     return Scaffold(
-      appBar: AppBar(title: const Text('New payroll')),
+      appBar: AppBar(title: const Text('New invoice batch')),
       body: PageBody(maxWidth: 1300, children: [
         const SizedBox(height: 16),
         SectionCard(
@@ -1796,7 +1796,7 @@ class _BatchScreenState extends State<BatchScreen> {
     }
     PdfViewScreen.open(context,
         title: 'Batch #${widget.id} ${view == 'summary' ? 'summary' : suffix}',
-        fileName: 'payroll-${widget.id}-$view${suffix.isEmpty ? '' : '-$suffix'}.pdf',
+        fileName: 'invoice-${widget.id}-$view${suffix.isEmpty ? '' : '-$suffix'}.pdf',
         load: () => Api.I.getBytes('/equipment/payroll/batches/${widget.id}/export.pdf',
             query: {'view': view, 'vendor_id': vendorId, 'equipment_id': equipmentId, if (hide.isNotEmpty) 'hide': (hide.toList()..sort()).join(',')}));
   }
@@ -1824,7 +1824,7 @@ class _BatchScreenState extends State<BatchScreen> {
   Future<void> _excel() async {
     try {
       final bytes = await Api.I.getBytes('/equipment/payroll/batches/${widget.id}/export.xlsx');
-      final msg = await FileSave.save(bytes, 'equipment-payroll-${widget.id}-v${_b!.str('version_number')}.xlsx');
+      final msg = await FileSave.save(bytes, 'equipment-invoices-${widget.id}-v${_b!.str('version_number')}.xlsx');
       if (mounted) showSnack(context, msg);
     } catch (e) {
       if (mounted) showError(context, e);
@@ -1847,7 +1847,7 @@ class _BatchScreenState extends State<BatchScreen> {
     final b = _b;
     return Scaffold(
       appBar: AppBar(
-        title: Text('Payroll batch #${widget.id}'),
+        title: Text('Invoice batch #${widget.id}'),
         actions: [
           if (b != null) ...[
             IconButton(tooltip: 'Versions', onPressed: _versions, icon: const Icon(Icons.history_rounded)),

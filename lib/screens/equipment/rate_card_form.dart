@@ -443,8 +443,8 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                   ? 'A normal month: the vendor gets the monthly price whatever the number of working days (24, 26 or 27). '
                       'Hourly price = monthly price / working days of the month (days minus Fridays) / hours per day. '
                       'Every working day is due its hours on its own: missing hours are deducted; extra hours are overtime (if "Pay overtime" is on) '
-                      'or, if the Admin decides it on the payroll, cover missing hours. '
-                      'A month billed differently (e.g. the vendor is paid the 27th day) gets an EXCEPTION for that machine and month on New payroll.'
+                      'or, if the Admin decides it on the invoice, cover missing hours. '
+                      'A month billed differently (e.g. the vendor is paid the 27th day) gets an EXCEPTION for that machine and month on New invoice batch.'
                   : null),
           if (_mode == 'Monthly') _section('Overtime', [
             SwitchListTile(
@@ -484,7 +484,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               ], onChanged: (v) => setState(() => _breakPolicy = v ?? _breakPolicy)),
             ]),
           ], hint: _mode == 'Monthly'
-              ? 'Standby of a monthly machine: no %. On each standby row the Admin or Accountant gives the hours to pay (at most the hours per day); payroll waits until they are set.'
+              ? 'Standby of a monthly machine: no %. On each standby row the Admin or Accountant gives the hours to pay (at most the hours per day); invoicing waits until they are set.'
               : null),
           if (!_dnr) _section('Fuel', [
             Dropdown<String>(label: 'Fuel', value: _fuel, width: null, items: const [
@@ -560,7 +560,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
           const Text(
             '1. Save the prices here (per trip, per ton...).\n'
             '2. Record every paper delivery note in "Delivery notes (DNR)": number, date, site, item and quantity.\n'
-            '3. New payroll adds one DNR line per delivery note (quantity x price). A note is paid once only.\n'
+            '3. New invoice batch adds one DNR line per delivery note (quantity x price). A note is paid once only.\n'
             '4. Fuel issued by us to a machine without a time rate card is deducted from its DNR total.',
             style: TextStyle(fontSize: 13, height: 1.5),
           ),

@@ -11,7 +11,8 @@ import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 
 /// Daily Equipment Report for an external party (sub-contractor / client).
-/// Lists only the machines that checked in on the day: no vendor, no hours, no money.
+/// Every machine on site with its state and what it did, breakdowns and stoppages with their reason, month-to-date figures:
+/// no vendor, no hours or times, no money. Standby machines are shown only when asked.
 /// English PDF = main copy, Arabic PDF = separate copy. "To" / "Issued by" and the info labels are remembered.
 class ClientReportScreen extends StatefulWidget {
   const ClientReportScreen({super.key, this.siteId, this.siteLabel, this.shift, this.standalone = false});
@@ -53,6 +54,7 @@ class _ClientReportScreenState extends State<ClientReportScreen> {
 
   String _date = Fmt.today();
   late String _shift = widget.shift ?? 'All';
+  bool _standby = false; // show Standby machines and stoppages (our own idle time) to the reader
   List<PickOption>? _sites;
   Object? _sitesError;
   final Set<int> _selected = {}; // empty = every active site
@@ -138,6 +140,7 @@ class _ClientReportScreenState extends State<ClientReportScreen> {
       'issued_by': _by.text.trim(),
       'issued_title': _title.text.trim(),
       'notes': notes.isEmpty ? null : jsonEncode(notes),
+      'include_standby': _standby ? 'true' : 'false',
     };
     if (!mounted) return;
     await PdfViewScreen.open(context,
@@ -224,7 +227,7 @@ class _ClientReportScreenState extends State<ClientReportScreen> {
   Widget build(BuildContext context) {
     final body = PageBody(maxWidth: 900, children: [
       if (!widget.standalone)
-        const PageHeader(title: 'Daily report (client)', subtitle: 'Machines that worked on the day - for the sub-contractor or the client'),
+        const PageHeader(title: 'Daily report (client)', subtitle: 'Machines on site, their state and work of the day - for the sub-contractor or the client'),
       if (widget.standalone) const SizedBox(height: 16),
       SectionCard(
         title: 'Day and shift',
@@ -243,6 +246,18 @@ class _ClientReportScreenState extends State<ClientReportScreen> {
       ),
       const SizedBox(height: 12),
       _sitesCard(),
+      const SizedBox(height: 12),
+      SectionCard(
+        title: 'Content',
+        child: SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: _standby,
+          onChanged: (v) => setState(() => _standby = v),
+          title: const Text('Show Standby machines'),
+          subtitle: const Text('Machines ready on site that we did not use, and Standby stoppages. Off: they are left out of the report.',
+              style: TextStyle(color: AppColors.muted, fontSize: 12)),
+        ),
+      ),
       const SizedBox(height: 12),
       SectionCard(
         title: 'Addressed to / issued by',

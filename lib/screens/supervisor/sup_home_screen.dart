@@ -8,6 +8,7 @@ import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/ui.dart';
+import '../help/help_center_screen.dart';
 import 'day_board_screen.dart';
 
 /// Supervisor home: today's sites (one tap to the day board), rejected rows, paper sheets.
@@ -55,6 +56,18 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
     _load();
   }
 
+  /// Help & Assistant (from the app bar or the menu); "On this page" shows the topics of My sites.
+  void _help() => openHelp(context, fromScreen: 'my-sites', onOpenScreen: _openFromHelp);
+
+  /// "Open ..." in a help topic: close the help pages, then show My sites or Rejected rows.
+  Future<void> _openFromHelp(String screenId) async {
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    if (screenId == 'rejected-rows') {
+      await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const RejectedRowsScreen()));
+    }
+    if (mounted) _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final sites = _s.data ?? <Json>[];
@@ -68,7 +81,10 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
           const SizedBox(width: 10),
           const Flexible(child: Text(AppConfig.appName, overflow: TextOverflow.ellipsis)),
         ]),
-        actions: [IconButton(tooltip: 'Refresh', onPressed: _load, icon: const Icon(Icons.refresh_rounded))],
+        actions: [
+          IconButton(tooltip: 'Help & Assistant', onPressed: _help, icon: const Icon(Icons.help_outline_rounded)),
+          IconButton(tooltip: 'Refresh', onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
+        ],
       ),
       drawer: _drawer(),
       body: RefreshIndicator(
@@ -218,6 +234,14 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
             title: const Text('Rejected rows'),
             trailing: _rejected == 0 ? null : Pill('$_rejected', color: AppColors.breakdown),
             onTap: () => _go(const RejectedRowsScreen()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.help_outline_rounded),
+            title: const Text('Help & Assistant'),
+            onTap: () {
+              Navigator.pop(context);
+              _help();
+            },
           ),
           const Divider(),
           ListTile(leading: const Icon(Icons.lock_reset_rounded), title: const Text('Change password'), onTap: () => _go(const ChangePasswordScreen())),

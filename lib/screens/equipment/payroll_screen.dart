@@ -14,6 +14,10 @@ import 'attendance_review_screen.dart' show AttendanceDetailSheet;
 /// Shown with the blockers but never stop the generation.
 const _infoOnly = {'IN_OTHER_BATCH', 'SCAN_MISSING', 'MONTHLY_DAYS_WITHOUT_ROWS'};
 
+/// Information only (never blocks)? The server says it per blocker ('blocking', 12 Oct 2026: MONTHLY_DAYS_WITHOUT_ROWS
+/// blocks while its setting is on); older servers without the flag fall back to the fixed list.
+bool _isInfo(Json b) => b.containsKey('blocking') ? !b.flag('blocking') : _infoOnly.contains(b.str('code'));
+
 const _blockerHelp = {
   'NOT_APPROVED': 'Approve or reject them in Attendance review.',
   'OPEN_SESSION': 'The supervisor must check the machine out.',
@@ -25,8 +29,9 @@ const _blockerHelp = {
   'IN_OTHER_BATCH': 'Already in another batch (draft or finalized); they are skipped. Each day is billed once.',
   'FUEL_PRICE_MISSING': 'Add the official fuel price for these dates in Fuel & adjustments > Fuel prices.',
   'SCAN_MISSING': 'Information only: the accountant must upload these signed sheets (Paper sheets) before the Admin finalizes.',
-  'MONTHLY_DAYS_WITHOUT_ROWS': 'Information only: check these days before generating. If the machine worked, the supervisor must record '
-      'the day; if it did not, record it as Absent, Standby or Breakdown so the deduction is intended.',
+  'MONTHLY_DAYS_WITHOUT_ROWS': 'Each of these days is deducted as a full absence, and extra hours on other days do not make up for it. '
+      'If the machine worked, the supervisor must record the day; if it did not, record it as Absent, Standby, Breakdown or Holiday. '
+      'Or generate anyway with a reason.',
 };
 
 /// Accepting blockers is a decision kept on the batch: ask why (at least 5 characters).
@@ -34,7 +39,8 @@ Future<String?> askAcceptReason(BuildContext context) => promptText(context, 'Wh
     label: 'Reason (kept on the batch and shown to whoever finalizes it)',
     minLength: 5,
     confirm: 'Generate anyway',
-    help: 'Rows with problems are left out of this batch. They can be paid later in another batch of an OPEN period.');
+    help: 'Rows with problems are left out of this batch; they can be paid later in another batch of the same dates. '
+        'Monthly days without a row are deducted as a full absence.');
 
 /// Human labels of the manual changes a batch pays (finalize review).
 const _reviewKinds = {
@@ -371,7 +377,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
-  bool get _hasBlocking => (_blockers ?? []).any((b) => !_infoOnly.contains(b.str('code')));
+  bool get _hasBlocking => (_blockers ?? []).any((b) => !_isInfo(b));
 
   String? _acceptReason;
 
@@ -878,8 +884,8 @@ class _BlockersCard extends StatelessWidget {
           Theme(
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
-              leading: Icon(_infoOnly.contains(b.str('code')) ? Icons.info_outline_rounded : Icons.block_rounded,
-                  color: _infoOnly.contains(b.str('code')) ? AppColors.info : AppColors.breakdown),
+              leading: Icon(_isInfo(b) ? Icons.info_outline_rounded : Icons.block_rounded,
+                  color: _isInfo(b) ? AppColors.info : AppColors.breakdown),
               title: Text('${b.str('message')}  (${b.str('count')})', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
               subtitle: Text(_blockerHelp[b.str('code')] ?? '', style: const TextStyle(fontSize: 12.5)),
               childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),

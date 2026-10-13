@@ -17,9 +17,12 @@ import '../screens/equipment/machines_screen.dart';
 import '../screens/equipment/payroll_screen.dart';
 import '../screens/equipment/timesheets_screen.dart';
 import '../screens/equipment/vendors_screen.dart';
+import '../screens/help/help_center_screen.dart';
 
 class _NavItem {
-  const _NavItem(this.label, this.icon, this.builder, {this.section});
+  const _NavItem(this.id, this.label, this.icon, this.builder, {this.section});
+  /// Screen id used by the Help Center (assistant/guide.md on the server): "On this page" and "Open ...".
+  final String id;
   final String label;
   final IconData icon;
   final Widget Function() builder;
@@ -39,20 +42,33 @@ class _AppShellState extends State<AppShell> {
   List<_NavItem> get _items {
     final admin = Auth.I.isAdmin;
     return [
-      _NavItem('Live board', Icons.dashboard_rounded, () => const LiveBoardScreen(), section: 'Operations'),
-      _NavItem('Attendance review', Icons.fact_check_rounded, () => const AttendanceReviewScreen()),
-      _NavItem('Paper sheets', Icons.description_rounded, () => const TimesheetsScreen()),
-      _NavItem('Daily report (client)', Icons.assignment_turned_in_rounded, () => const ClientReportScreen()),
-      _NavItem('Invoice', Icons.payments_rounded, () => const PayrollScreen(), section: 'Money'),
-      _NavItem('Fuel & adjustments', Icons.local_gas_station_rounded, () => const FuelAdjustmentsScreen()),
-      _NavItem('Delivery notes (DNR)', Icons.local_shipping_rounded, () => const DeliveryNotesScreen()),
-      _NavItem('Machines', Icons.precision_manufacturing_rounded, () => const MachinesScreen(), section: 'Fleet'),
-      _NavItem('Vendors', Icons.business_rounded, () => const VendorsScreen()),
-      _NavItem('Sites', Icons.location_city_rounded, () => const SitesScreen(), section: 'Setup'),
-      if (admin) _NavItem('Users', Icons.manage_accounts_rounded, () => const UsersScreen()),
-      if (admin) _NavItem('Settings', Icons.tune_rounded, () => const SettingsScreen()),
-      if (admin) _NavItem('Audit log', Icons.history_rounded, () => const AuditScreen()),
+      _NavItem('live-board', 'Live board', Icons.dashboard_rounded, () => const LiveBoardScreen(), section: 'Operations'),
+      _NavItem('attendance-review', 'Attendance review', Icons.fact_check_rounded, () => const AttendanceReviewScreen()),
+      _NavItem('paper-sheets', 'Paper sheets', Icons.description_rounded, () => const TimesheetsScreen()),
+      _NavItem('client-report', 'Daily report (client)', Icons.assignment_turned_in_rounded, () => const ClientReportScreen()),
+      _NavItem('invoices', 'Invoice', Icons.payments_rounded, () => const PayrollScreen(), section: 'Money'),
+      _NavItem('fuel-adjustments', 'Fuel & adjustments', Icons.local_gas_station_rounded, () => const FuelAdjustmentsScreen()),
+      _NavItem('delivery-notes', 'Delivery notes (DNR)', Icons.local_shipping_rounded, () => const DeliveryNotesScreen()),
+      _NavItem('machines', 'Machines', Icons.precision_manufacturing_rounded, () => const MachinesScreen(), section: 'Fleet'),
+      _NavItem('vendors', 'Vendors', Icons.business_rounded, () => const VendorsScreen()),
+      _NavItem('sites', 'Sites', Icons.location_city_rounded, () => const SitesScreen(), section: 'Setup'),
+      if (admin) _NavItem('users', 'Users', Icons.manage_accounts_rounded, () => const UsersScreen()),
+      if (admin) _NavItem('settings', 'Settings', Icons.tune_rounded, () => const SettingsScreen()),
+      if (admin) _NavItem('audit-log', 'Audit log', Icons.history_rounded, () => const AuditScreen()),
     ];
+  }
+
+  /// Help & Assistant, opened from the current screen ("On this page" shows its topics).
+  void _help() {
+    final items = _items;
+    openHelp(context, fromScreen: _index < items.length ? items[_index].id : null, onOpenScreen: _openFromHelp);
+  }
+
+  /// "Open ..." in a help topic: close the help pages and show that screen.
+  void _openFromHelp(String screenId) {
+    final i = _items.indexWhere((it) => it.id == screenId);
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    if (i >= 0 && mounted) setState(() => _index = i);
   }
 
   void _profile() {
@@ -127,7 +143,7 @@ class _AppShellState extends State<AppShell> {
     if (wide) {
       return Scaffold(
         body: Row(children: [
-          _SideNav(items: items, index: _index, onSelect: (i) => setState(() => _index = i)),
+          _SideNav(items: items, index: _index, onSelect: (i) => setState(() => _index = i), onHelp: _help),
           Expanded(child: Scaffold(appBar: appBar, body: page)),
         ]),
       );
@@ -136,10 +152,19 @@ class _AppShellState extends State<AppShell> {
       appBar: appBar,
       drawer: Drawer(
         backgroundColor: AppColors.navyDark,
-        child: _SideNav(items: items, index: _index, expanded: true, onSelect: (i) {
-          Navigator.pop(context);
-          setState(() => _index = i);
-        }),
+        child: _SideNav(
+          items: items,
+          index: _index,
+          expanded: true,
+          onSelect: (i) {
+            Navigator.pop(context);
+            setState(() => _index = i);
+          },
+          onHelp: () {
+            Navigator.pop(context);
+            _help();
+          },
+        ),
       ),
       body: page,
     );
@@ -153,10 +178,11 @@ String _initials(String name) {
 }
 
 class _SideNav extends StatelessWidget {
-  const _SideNav({required this.items, required this.index, required this.onSelect, this.expanded = false});
+  const _SideNav({required this.items, required this.index, required this.onSelect, required this.onHelp, this.expanded = false});
   final List<_NavItem> items;
   final int index;
   final ValueChanged<int> onSelect;
+  final VoidCallback onHelp;
   final bool expanded;
 
   @override
@@ -215,6 +241,25 @@ class _SideNav extends StatelessWidget {
             ]),
           ),
           Expanded(child: ListView(padding: const EdgeInsets.only(bottom: 16), children: children)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            child: Material(
+              color: const Color(0x1AFFFFFF),
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: onHelp,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                  child: Row(children: [
+                    Icon(Icons.help_outline_rounded, size: 20, color: AppColors.gold),
+                    SizedBox(width: 12),
+                    Expanded(child: Text('Help & Assistant', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14))),
+                  ]),
+                ),
+              ),
+            ),
+          ),
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 0, 20, 16),
             child: Text(AppConfig.companyName, style: TextStyle(color: Color(0xFF7F8AB4), fontSize: 11)),

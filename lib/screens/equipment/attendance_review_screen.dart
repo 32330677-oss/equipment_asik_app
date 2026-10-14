@@ -8,7 +8,7 @@ import '../../core/theme.dart';
 import '../../widgets/lookups.dart';
 import '../../widgets/ui.dart';
 
-/// Admin review of machine attendance: approve / reject in bulk, anomalies, edits, corrections.
+/// Admin review of machine attendance: approve / reject in bulk, anomalies, edits.
 class AttendanceReviewScreen extends StatefulWidget {
   const AttendanceReviewScreen({super.key});
   @override
@@ -245,7 +245,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
 }
 
 /// Details of one row with the office actions: acknowledge anomaly, edit (several fields at once), void, standby hours,
-/// official Correction (financially committed period), supervisors' change requests, full history.
+/// supervisors' change requests, full history. A day inside an invoice handed over to finance is locked.
 class AttendanceDetailSheet extends StatefulWidget {
   const AttendanceDetailSheet({super.key, required this.id});
   final int id;
@@ -312,20 +312,19 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
   /// Current value of a field: the pending change if any, else the row.
   Object? _cur(Json r, Map<String, dynamic> changes, String key) => changes.containsKey(key) ? changes[key] : r[key];
 
-  /// Several fields in one go. Before the lock: a direct office edit (reason optional; an Approved row then shows as
-  /// "edited after approval"). Inside a finalized / paid period: an official Correction — applied at once by an Admin,
-  /// sent to an Admin for approval by an Accountant.
-  Future<void> _edit({required bool correction}) async {
+  /// Several fields in one go: a direct office edit (reason optional; an Approved row then shows as "edited after
+  /// approval"). A draft invoice of the row then asks to be recalculated; an issued one is brought up to date by itself
+  /// with the same number. Refused while the invoice is handed over to finance (14 Oct 2026).
+  Future<void> _edit() async {
     final r = _r!;
     final changes = <String, dynamic>{};
-    final standbyApplies = r.obj('standby_credit').flag('applies');
     while (true) {
       final status = '${_cur(r, changes, 'day_status') ?? ''}';
       final working = status == 'Working';
       final inT = _cur(r, changes, 'check_in_time') as String?;
       final outT = _cur(r, changes, 'check_out_time') as String?;
       String mark(String key, String text) => changes.containsKey(key) ? '$text  (changed)' : text;
-      final what = await pickFromList(context, correction ? 'Official correction: what is wrong?' : 'Edit row: what is wrong?', [
+      final what = await pickFromList(context, 'Edit row: what is wrong?', [
         if (changes.isNotEmpty) PickOption('done', 'Done: continue with ${changes.length} change(s)', changes.keys.map(fieldLabel).join(', ')),
         PickOption('status', 'Day status', mark('day_status', status)),
         if (working || inT != null) PickOption('in', 'Check-in time', mark('check_in_time', Fmt.time(inT))),
@@ -334,10 +333,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         if (working) PickOption('operator', 'Operator', mark('operator_id', r.str('operator_name', '-'))),
         if (working) PickOption('meter', 'Meter readings', mark('meter_start', '${_cur(r, changes, 'meter_start') ?? '-'} -> ${_cur(r, changes, 'meter_end') ?? '-'}')),
         PickOption('work', 'Work done', mark('work_description', '${_cur(r, changes, 'work_description') ?? '-'}')),
-        if (correction && standbyApplies)
-          PickOption('standby', 'Standby hours paid', mark('standby_credit_hours', r.intOrNull('standby_credit_minutes') == null ? '-' : '${Fmt.hoursFromMinutes(r.intv('standby_credit_minutes'))} h')),
         PickOption('remarks', 'Remarks', mark('remarks', '${_cur(r, changes, 'remarks') ?? '-'}')),
-        if (correction && changes.isEmpty) PickOption('cancel_row', 'The row should not exist', 'cancels the whole row (wrong machine, wrong day, duplicate)'),
       ]);
       if (!mounted) return;
       if (what == null) {
@@ -355,50 +351,11 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
       if (!mounted) return;
     }
     if (changes.isEmpty || !mounted) return;
-    if (correction) {
-      final admin = Auth.I.isAdmin;
-      final reason = await promptText(context, 'Reason of the correction',
-          label: 'Reason (printed on the debit / credit note)',
-          minLength: 5,
-          confirm: admin ? 'Apply correction' : 'Send to the Admin',
-          help: 'This period is already ${r.str('locked_by_status', 'finalized').toLowerCase()}: the paid batch never changes. '
-              'The difference is settled by a debit or credit note in the first open period'
-              '${admin ? ' as soon as you apply it.' : ', after an Admin approves it.'}');
-      if (reason == null || !mounted) return;
-      final amount = await promptText(context, 'Amount to settle (optional)',
-          label: 'Amount',
-          required: false,
-          maxLines: 1,
-          help: 'Leave empty to compute it from the paid batch. If this row was never paid (for example approved late), '
-              'type the amount from the signed sheet (0 if no money changes).');
-      if (amount == null || !mounted) return;
-      num? amountOverride;
-      String? overrideReason;
-      if (amount.trim().isNotEmpty) {
-        amountOverride = num.tryParse(amount.replaceAll(',', '.'));
-        if (amountOverride == null) {
-          showError(context, ApiException(null, 'VALIDATION', 'Type a number for the amount (negative = credit to us).'));
-          return;
-        }
-        overrideReason = await promptText(context, 'How was the amount found?', label: 'e.g. 9 h x 40 from the paper sheet', minLength: 3);
-        if (overrideReason == null || !mounted) return;
-      }
-      await _do(
-          () => Api.I.post('/equipment/admin/attendance/${widget.id}/correction', {
-                'reason': reason,
-                'changes': changes,
-                if (amountOverride != null) 'amount_override': amountOverride,
-                if (overrideReason != null) 'override_reason': overrideReason,
-              }),
-          admin
-              ? 'Correction applied: the debit / credit note and the adjustment were issued.'
-              : 'Sent to the Admin for approval (Fuel & adjustments -> Corrections).');
-    } else {
+    {
       final approved = r.str('status') == 'Approved';
-      final stale = r.intOrNull('generated_batch_id') != null;
       final notes = [
         if (approved) 'The row stays Approved and is marked as edited after approval.',
-        if (stale) 'Draft invoice batch #${r.str('generated_batch_id')} uses this row: it becomes out of date and must be regenerated.',
+        if (_coveredText(r) != null) _coveredText(r)!,
       ];
       final reason = await promptText(context, approved ? 'Why change an approved row? (optional)' : 'Reason (optional)',
           label: 'Reason (optional)', required: false, help: notes.isEmpty ? null : notes.join(' '));
@@ -474,18 +431,6 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         if (v == null) return;
         changes['work_description'] = v;
       }
-      case 'standby': {
-        final max = r.obj('standby_credit').dblOrNull('max_hours') ?? 24;
-        final v = await promptText(context, 'Standby hours to pay (max ${max.toStringAsFixed(2)} h)', label: 'Hours', maxLines: 1,
-            initial: r.intOrNull('standby_credit_minutes') == null ? '' : (r.intv('standby_credit_minutes') / 60).toStringAsFixed(2));
-        if (v == null) return;
-        final h = double.tryParse(v.replaceAll(',', '.'));
-        if (h == null || h < 0 || h > max) {
-          if (mounted) showError(context, ApiException(null, 'VALIDATION', 'Type a number of hours between 0 and ${max.toStringAsFixed(2)}.'));
-          return;
-        }
-        changes['standby_credit_hours'] = h;
-      }
       default: {
         final v = await promptText(context, 'Remarks', label: 'Remarks', initial: '${_cur(r, changes, 'remarks') ?? ''}', required: false);
         if (v == null) return;
@@ -547,7 +492,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
     );
   }
 
-  /// A row that should not exist, before its period is finalized: kept as Cancelled (never deleted).
+  /// A row that should not exist, (not in an invoice handed over to finance): kept as Cancelled (never deleted).
   Future<void> _void() async {
     final r = _r!;
     final reason = await promptText(context, 'Void this row?',
@@ -555,7 +500,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         required: false,
         confirm: 'Void the row',
         help: 'The row is kept in the history as Cancelled and is not paid.'
-            '${r.intOrNull('generated_batch_id') == null ? '' : ' Draft invoice batch #${r.str('generated_batch_id')} becomes out of date.'}');
+            '${_coveredText(r) == null ? '' : ' ${_coveredText(r)}'}');
     if (reason == null) return;
     await _do(() => Api.I.patch('/equipment/admin/attendance/${widget.id}/cancel', {if (reason.trim().isNotEmpty) 'reason': reason.trim()}),
         'Row voided (kept as Cancelled).');
@@ -571,24 +516,40 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
     }
     final note = await promptText(context, 'Apply the requested change?', label: 'Note (optional)', required: false, confirm: 'Apply');
     if (note == null || !mounted) return;
+    await _do(() => Api.I.patch('/equipment/admin/change-requests/$id/approve', {if (note.isNotEmpty) 'note': note}), 'Change applied to the row.');
+  }
+
+  /// What a change of this row does to its invoice (null: in no invoice).
+  String? _coveredText(Json r) {
+    final c = r.obj('covered_by');
+    if (c.isEmpty) return null;
+    final name = c.strOrNull('invoice_no') ?? 'draft invoice #${c.str('eq_batch_id')}';
+    return switch (c.str('state')) {
+      'draft' => 'This day is in $name: the draft then asks to be recalculated.',
+      'issued' => 'This day is in $name (issued, still in the office): the invoice is brought up to date with the same number.',
+      'returned' => 'This day is in $name, withdrawn from finance: re-issue it afterwards (new number).',
+      _ => 'This day is in $name.',
+    };
+  }
+
+  Future<void> _approve() async {
     try {
-      await Api.I.patch('/equipment/admin/change-requests/$id/approve', {if (note.isNotEmpty) 'note': note});
-      if (mounted) showSnack(context, 'Change applied to the row.');
-      _load();
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      if (e.code != 'ROW_LOCKED_USE_CORRECTION') {
-        showError(context, e);
-        return;
+      final r = asJson(await Api.I.post('/equipment/admin/attendance/approve', {'ids': [widget.id]}));
+      final skipped = r.list('skipped');
+      if (mounted) {
+        showSnack(context, skipped.isEmpty ? 'Row approved.' : 'Not approved: ${skipped.first.str('message', skipped.first.str('reason').replaceAll('_', ' ').toLowerCase())}',
+            error: skipped.isNotEmpty);
       }
-      final ok = await confirmDialog(context, 'This period is already paid',
-          '${e.message}\n\nTurn the request into an official Correction? '
-          '${Auth.I.isAdmin ? 'It is applied at once' : 'An Admin then approves it'}, and the difference is settled by a debit / credit note.',
-          confirm: Auth.I.isAdmin ? 'Apply as a Correction' : 'Send to the Admin');
-      if (!ok) return;
-      await _do(() => Api.I.patch('/equipment/admin/change-requests/$id/approve', {'convert_to_correction': true, if (note.isNotEmpty) 'note': note}),
-          Auth.I.isAdmin ? 'Correction applied from the change request.' : 'Correction sent to the Admin for approval.');
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
     }
+  }
+
+  Future<void> _reject() async {
+    final why = await promptText(context, 'Reject this row?', label: 'Why? (the supervisor sees it and fixes the row)', minLength: 3, confirm: 'Reject');
+    if (why == null) return;
+    await _do(() => Api.I.post('/equipment/admin/attendance/reject', {'ids': [widget.id], 'notes': why}), 'Row rejected.');
   }
 
   @override
@@ -598,7 +559,6 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
     final office = Auth.I.isAdmin || Auth.I.isAccountant;
     final cancelled = r?.str('status') == 'Cancelled';
     final canGiveStandby = office && !_locked && !cancelled && (r?.obj('standby_credit').flag('applies') ?? false);
-    final lockedStatus = r?.str('locked_by_status', 'Finalized') ?? 'Finalized';
     return SafeArea(
         child: SizedBox(
           height: MediaQuery.of(context).size.height * 0.85,
@@ -695,34 +655,32 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                           icon: Icons.edit_note_rounded,
                           text: 'Edited after approval${r.strOrNull('admin_edit_at') == null ? '' : ' on ${Fmt.date(r.str('admin_edit_at'))}'}: ${r.str('admin_edit_reason')}',
                         ),
-                      if (!_locked && r.intOrNull('generated_batch_id') != null)
-                        NoticeBox(
-                          icon: Icons.receipt_long_rounded,
-                          text: 'Used by draft invoice batch #${r.str('generated_batch_id')} (not finalized). A change here makes that batch out of date: regenerate it before finalizing.',
-                        ),
+                      if (!_locked && _coveredText(r) != null)
+                        NoticeBox(icon: Icons.receipt_long_rounded, text: _coveredText(r)!),
                       if (_locked)
                         NoticeBox(
-                          color: lockedStatus == 'Paid' ? AppColors.working : AppColors.navy,
+                          color: AppColors.navy,
                           icon: Icons.lock_rounded,
-                          title: '$lockedStatus by batch #${r.str('locked_by_batch_id')}',
-                          text: 'This period is financially committed: the row is never edited directly. Use an official Correction '
-                              '(an Admin applies it at once; an Accountant sends it to an Admin). The difference is settled by a debit / credit note.',
+                          title: r.str('locked_by_state') == 'returned' ? 'Invoice withdrawn from finance' : 'Invoice handed over to finance',
+                          text: '${r.str('locked_reason', 'This day is in an invoice that is locked.')} '
+                              'A difference can also be settled with a debit / credit note (Invoices).',
                         ),
-                      if (office && !cancelled)
+                      if (office && !cancelled && !_locked)
                         Wrap(spacing: 8, runSpacing: 8, children: [
-                          if (!_locked) ...[
-                            OutlinedButton.icon(onPressed: () => _edit(correction: false), icon: const Icon(Icons.edit_rounded), label: const Text('Edit')),
+                          if (admin && r.str('status') == 'Submitted') ...[
+                            FilledButton.icon(onPressed: _approve, icon: const Icon(Icons.check_circle_rounded), label: const Text('Approve')),
                             OutlinedButton.icon(
-                              onPressed: _void,
-                              icon: const Icon(Icons.block_rounded, color: AppColors.breakdown),
-                              label: const Text('Void row', style: TextStyle(color: AppColors.breakdown)),
+                              onPressed: _reject,
+                              icon: const Icon(Icons.cancel_rounded, color: AppColors.breakdown),
+                              label: const Text('Reject', style: TextStyle(color: AppColors.breakdown)),
                             ),
-                          ] else
-                            FilledButton.tonalIcon(
-                              onPressed: () => _edit(correction: true),
-                              icon: const Icon(Icons.gavel_rounded),
-                              label: Text(admin ? 'Official correction' : 'Official correction (to the Admin)'),
-                            ),
+                          ],
+                          OutlinedButton.icon(onPressed: _edit, icon: const Icon(Icons.edit_rounded), label: const Text('Edit')),
+                          OutlinedButton.icon(
+                            onPressed: _void,
+                            icon: const Icon(Icons.block_rounded, color: AppColors.breakdown),
+                            label: const Text('Void row', style: TextStyle(color: AppColors.breakdown)),
+                          ),
                         ]),
                       if (r.list('change_requests').isNotEmpty) ...[
                         const SizedBox(height: 12),
@@ -732,7 +690,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                       ],
                       if (r.list('corrections').isNotEmpty) ...[
                         const SizedBox(height: 12),
-                        SectionCard(title: 'Official corrections', child: Column(children: [
+                        SectionCard(title: 'Official corrections (before 14 Oct 2026)', child: Column(children: [
                           for (final c in r.list('corrections'))
                             Padding(
                               padding: const EdgeInsets.symmetric(vertical: 4),
@@ -757,7 +715,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
                                   for (final line in changedFieldLines(h['changed_fields']))
                                     Text(line, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
                                   if ((h.strOrNull('payroll_effect') ?? 'none') != 'none')
-                                    Text('Invoice: ${h.str('payroll_effect').replaceFirst('stale:', 'draft batch #').replaceFirst('correction:', 'correction #')}',
+                                    Text('Invoice: ${h.str('payroll_effect').replaceFirst('stale:', 'invoice #').replaceFirst('correction:', 'correction #')}',
                                         style: const TextStyle(fontSize: 12, color: AppColors.info)),
                                 ]),
                               ),

@@ -22,7 +22,7 @@ class _AuditScreenState extends State<AuditScreen> {
   static const _pageSize = 50;
   static const _tables = ['users', 'sites', 'site_supervisors', 'settings', 'eq_vendors', 'eq_vendor_contracts', 'eq_equipment', 'eq_operators',
     'eq_rate_cards', 'eq_site_assignments', 'eq_attendance', 'eq_downtime_periods', 'eq_fuel_issues', 'eq_adjustments', 'eq_timesheets',
-    'eq_timesheet_scans', 'eq_paper_checks', 'eq_payroll_batches', 'eq_attendance_corrections'];
+    'eq_timesheet_scans', 'eq_paper_checks', 'eq_payroll_batches', 'eq_notes', 'eq_handovers', 'eq_withdrawals'];
 
   @override
   void initState() {

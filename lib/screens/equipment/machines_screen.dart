@@ -364,7 +364,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
         return true;
       },
       body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('Use this when the first day was entered wrong. Days already paid by a finalized invoice cannot move: use an official Correction.',
+        const Text('Use this when the first day was entered wrong. Days inside an invoice handed over to finance cannot move (withdraw it first, or make a debit / credit note).',
             style: TextStyle(color: AppColors.muted, fontSize: 13)),
         const SizedBox(height: 12),
         DateField(label: 'Real first day on the site', value: date, onChanged: (x) => set(() => date = x ?? date)),
@@ -682,7 +682,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
                           child: Text(rateText(c), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: AppColors.navy)),
                         ),
                         if (active) const Pill('Current', color: AppColors.gold),
-                        if (locked) const Padding(padding: EdgeInsets.only(left: 6), child: Pill('Used in an invoice', color: AppColors.info, icon: Icons.lock_rounded)),
+                        if (locked) const Padding(padding: EdgeInsets.only(left: 6), child: Pill('In an invoice handed over', color: AppColors.info, icon: Icons.lock_rounded)),
                         if (_admin)
                           PopupMenuButton<String>(
                             onSelected: (v) async {
@@ -856,7 +856,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
   }
 
   /// The first day was entered wrong (e.g. today instead of the day the machine joined): reason required.
-  /// Refused by the server when the days involved are inside a finalized payroll, or overlap earlier terms.
+  /// Refused by the server when the days involved are inside an invoice handed over to finance, or overlap earlier terms.
   Future<void> _changeFuelTermsStart(Json t) async {
     var date = t.str('effective_from');
     final reason = TextEditingController();
@@ -870,7 +870,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
         return true;
       },
       body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('Use this when the first day was entered wrong, e.g. while entering past months. Days already paid by a finalized invoice cannot move.',
+        const Text('Use this when the first day was entered wrong, e.g. while entering past months. Days inside an invoice handed over to finance cannot move.',
             style: TextStyle(color: AppColors.muted, fontSize: 13)),
         const SizedBox(height: 12),
         DateField(label: 'Real first day of the fuel difference', value: date, onChanged: (x) => set(() => date = x ?? date)),

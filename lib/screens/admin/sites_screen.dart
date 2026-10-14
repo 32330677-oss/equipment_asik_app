@@ -319,7 +319,7 @@ class _SupervisorsSheetState extends State<SupervisorsSheet> {
         minLength: 5,
         confirm: 'Save',
         help: 'Use this when the first day was entered wrong, e.g. while entering past months. '
-            'Days inside a finalized invoice cannot move, and two supervisors cannot cover the same site and shift.');
+            'Days inside an invoice handed over to finance cannot move, and two supervisors cannot cover the same site and shift.');
     if (reason == null) return;
     try {
       await Api.I.patch('/site-supervisors/${r.intv('site_supervisor_id')}/start', {'from_date': d, 'reason': reason});

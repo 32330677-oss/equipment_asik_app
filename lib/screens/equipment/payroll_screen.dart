@@ -11,91 +11,124 @@ import '../../widgets/pdf_content.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 import 'attendance_review_screen.dart' show AttendanceDetailSheet;
+import 'invoice_finance.dart';
+
+// Invoices (decisions of 13-14 Oct 2026). The app records attendance and issues invoices per vendor and machine, for
+// any period; it records no payment. An invoice is a Draft (no number, reserves its period), then Issued (VI / MI
+// numbers, kept up to date with the same numbers while in the office), then Handed over to finance (locked). The Admin
+// may withdraw it from finance (signed acknowledgement) and re-issue it with a new number, or cancel it.
 
 /// Shown with the blockers but never stop the generation.
 const _infoOnly = {'IN_OTHER_BATCH', 'SCAN_MISSING', 'MONTHLY_DAYS_WITHOUT_ROWS'};
 
-/// Information only (never blocks)? The server says it per blocker ('blocking', 12 Oct 2026: MONTHLY_DAYS_WITHOUT_ROWS
-/// blocks while its setting is on); older servers without the flag fall back to the fixed list.
+/// Information only (never blocks)? The server says it per blocker ('blocking'); older servers fall back to the list.
 bool _isInfo(Json b) => b.containsKey('blocking') ? !b.flag('blocking') : _infoOnly.contains(b.str('code'));
 
 const _blockerHelp = {
-  'NOT_APPROVED': 'Approve or reject them in Attendance review.',
-  'OPEN_SESSION': 'The supervisor must check the machine out.',
-  'UNACK_ANOMALY': 'Acknowledge the anomaly in Attendance review.',
+  'NOT_APPROVED': 'Approve or reject them here (Admin), or open a row to fix it.',
+  'OPEN_SESSION': 'The supervisor must check the machine out (or open the row and fix the times).',
+  'UNACK_ANOMALY': 'Open the row and acknowledge the anomaly.',
   'PAPER_NOT_MATCHED': 'Upload the signed sheet and reconcile it in Paper sheets.',
   'NO_RATE_CARD': 'Add a rate card (or a DNR price for per-unit work) for these dates on the machine page.',
   'FUEL_UNPRICED': 'Enter the price per litre in Fuel & adjustments.',
-  'STANDBY_HOURS_NOT_SET': 'Monthly machine standby: open the row in Attendance review and set the standby hours to pay.',
-  'IN_OTHER_BATCH': 'Already in another batch (draft or finalized); they are skipped. Each day is billed once.',
+  'STANDBY_HOURS_NOT_SET': 'Monthly machine standby: open the row and set the standby hours to pay.',
+  'IN_OTHER_BATCH': 'Already in another invoice; they are skipped. Each day is invoiced once.',
   'FUEL_PRICE_MISSING': 'Add the official fuel price for these dates in Fuel & adjustments > Fuel prices.',
-  'SCAN_MISSING': 'Information only: the accountant must upload these signed sheets (Paper sheets) before the Admin finalizes.',
+  'SCAN_MISSING': 'Information only: upload these signed sheets (Paper sheets) before the invoice is handed over to finance.',
   'MONTHLY_DAYS_WITHOUT_ROWS': 'Each of these days is deducted as a full absence; extra hours of other days cover it only if the Admin decides so. '
       'If the machine worked, the supervisor must record the day; if it did not, record it as Absent, Standby, Breakdown or Holiday. '
-      'Or generate anyway with a reason.',
+      'Or create the draft anyway with a reason.',
 };
 
-/// Accepting blockers is a decision kept on the batch: ask why (at least 5 characters).
-Future<String?> askAcceptReason(BuildContext context) => promptText(context, 'Why generate with open problems?',
-    label: 'Reason (kept on the batch and shown to whoever finalizes it)',
+/// Accepting blockers is a decision kept on the invoice: ask why (at least 5 characters).
+Future<String?> askAcceptReason(BuildContext context) => promptText(context, 'Why create the invoice with open problems?',
+    label: 'Reason (kept on the invoice and shown to whoever issues it)',
     minLength: 5,
-    confirm: 'Generate anyway',
-    help: 'Rows with problems are left out of this batch; they can be paid later in another batch of the same dates. '
+    confirm: 'Create anyway',
+    help: 'Rows with problems are left out of this invoice; they can be invoiced later. '
         'Monthly days without a row are deducted as a full absence.');
 
-/// Human labels of the manual changes a batch pays (finalize review).
+/// Human labels of the manual changes an invoice pays (shown before it is issued).
 const _reviewKinds = {
   'edited_after_approval': 'Row edited after approval',
   'late_entry': 'Late entry',
   'standby_hours': 'Standby hours decided',
   'adjustment': 'Manual adjustment',
-  'correction_settlement': 'Correction settlement',
   'fuel_changed': 'Fuel issue changed',
   'rate_card_changed': 'Rate card changed',
   'delivery_note_changed': 'Delivery note changed',
-  'previous_balance': 'Unpaid balance of an earlier batch added',
-  'opening_balance': 'Opening balance (from before the system) added',
-  'accepted_blockers': 'Generated with open problems',
+  'accepted_blockers': 'Created with open problems',
   'monthly_exception': 'Exception typed for the month (monthly machine)',
   'monthly_offset': 'Extra hours used to cover missing hours (Admin decision)',
   'monthly_offset_not_used': 'Extra hours NOT used to cover missing hours',
 };
 
-const _payMethods = {'BankTransfer': 'Bank transfer', 'Cheque': 'Cheque', 'Cash': 'Cash', 'Other': 'Other'};
+bool get _office => Auth.I.isAdmin || Auth.I.isAccountant;
 
-/// Money state of one vendor (or a whole batch) once finalized.
-Pill payStatePill(String? s) => switch (s) {
-      'Paid' => const Pill('Paid', color: AppColors.working, icon: Icons.paid_rounded),
-      'PartiallyPaid' => const Pill('Partly paid', color: AppColors.gold, icon: Icons.timelapse_rounded),
-      'CarriedForward' => const Pill('Carried forward', color: AppColors.edited, icon: Icons.redo_rounded),
-      'NothingDue' => const Pill('Nothing due', color: AppColors.neutral),
-      _ => const Pill('Not paid', color: AppColors.info, icon: Icons.schedule_rounded),
-    };
+Future<void> _openInvoice(BuildContext context, int id) => Navigator.push<void>(context, MaterialPageRoute(builder: (_) => BatchScreen(id: id)));
 
-Color _batchColor(String status, bool finalized, [String? payment]) {
-  if (status == 'Generated' && finalized && payment == 'PartiallyPaid') return AppColors.gold;
-  if (status == 'Generated' && finalized && payment == 'CarriedForward') return AppColors.edited;
-  switch (status) {
-    case 'Paid':
-      return AppColors.working;
-    case 'Voided':
-      return AppColors.breakdown;
-    case 'Superseded':
-      return AppColors.neutral;
-    default:
-      return finalized ? AppColors.info : AppColors.standby;
-  }
+Future<void> _openNote(BuildContext context, int id) => Navigator.push<void>(context, MaterialPageRoute(builder: (_) => NoteScreen(id: id)));
+
+/// "already in VI-2026-00012 (issued) 2026-10-01 to 2026-10-15" for one conflict of the overlap check.
+String _conflictText(Json c) => '${c.strOrNull('invoice_no') ?? 'draft #${c.str('eq_batch_id')}'} '
+    '(${(invoiceStateLabels[c.str('state')] ?? c.str('state')).toLowerCase()})  ${Fmt.date(c.str('start_date'))} – ${Fmt.date(c.str('end_date'))}'
+    '${c.strOrNull('site_code') == null ? '' : '  at ${c.str('site_code')}'}';
+
+/// The period asked overlaps invoices of the same machines: which ones (with a link) and what is still free.
+Future<void> showOverlapDialog(BuildContext context, List<Json> overlaps, {void Function(String from, String to)? onUse}) {
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('There is already an invoice in this period'),
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('A machine is never in two invoices on the same day. Choose a free period, or open the invoice that already covers it.',
+                style: TextStyle(color: AppColors.muted, fontSize: 13)),
+            for (final m in overlaps) ...[
+              const SizedBox(height: 12),
+              Text(m.str('label', m.str('equipment_code')), style: const TextStyle(fontWeight: FontWeight.w800)),
+              for (final c in m.list('conflicts'))
+                Row(children: [
+                  Icon(invoiceStateIcon(c.str('state')), size: 18, color: invoiceStateColor(c.str('state'))),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text(_conflictText(c), style: const TextStyle(fontSize: 13))),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _openInvoice(context, c.intv('eq_batch_id'));
+                    },
+                    child: const Text('Open'),
+                  ),
+                ]),
+              Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                const Text('Free:', style: TextStyle(color: AppColors.muted, fontSize: 13)),
+                if (m.list('free').isEmpty) const Text('nothing in this period', style: TextStyle(fontSize: 13)),
+                for (final f in m.list('free'))
+                  onUse == null
+                      ? Pill('${Fmt.date(f.str('from'))} – ${Fmt.date(f.str('to'))}', color: AppColors.working)
+                      : ActionChip(
+                          avatar: const Icon(Icons.event_available_rounded, size: 16, color: AppColors.working),
+                          label: Text('${Fmt.date(f.str('from'))} – ${Fmt.date(f.str('to'))}'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            onUse!(f.str('from'), f.str('to'));
+                          },
+                        ),
+              ]),
+            ],
+          ]),
+        ),
+      ),
+      actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+    ),
+  );
 }
 
-String _batchLabel(String status, bool finalized, [String? payment]) {
-  if (status != 'Generated') return status;
-  if (!finalized) return 'Draft';
-  if (payment == 'PartiallyPaid') return 'Partly paid';
-  if (payment == 'CarriedForward') return 'Carried forward';
-  return 'Finalized';
-}
-
-/// Payroll batches list + entry point to the "new payroll" wizard.
+// =================================================================== register
+/// Invoice register: per vendor, its invoices (newest period first) with their machine invoices and the debit / credit
+/// notes that belong to each, then the vendor's general notes. Filters find an old invoice quickly.
 class PayrollScreen extends StatefulWidget {
   const PayrollScreen({super.key});
   @override
@@ -104,7 +137,12 @@ class PayrollScreen extends StatefulWidget {
 
 class _PayrollScreenState extends State<PayrollScreen> {
   final _s = Loadable<List<Json>>();
-  String? _status;
+  String _state = '';
+  PickOption? _vendor;
+  PickOption? _machine;
+  String? _from;
+  String? _to;
+  final _q = TextEditingController();
 
   @override
   void initState() {
@@ -112,10 +150,23 @@ class _PayrollScreenState extends State<PayrollScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     setState(() { _s.loading = true; _s.error = null; });
     try {
-      _s.data = await Api.I.getList('/equipment/payroll/batches', query: {'status': _status});
+      _s.data = await Api.I.getList('/equipment/payroll/register', query: {
+        if (_state.isNotEmpty) 'state': _state,
+        if (_vendor != null) 'vendor_id': _vendor!.value,
+        if (_machine != null) 'equipment_id': _machine!.value,
+        if (_from != null) 'from': _from,
+        if (_to != null) 'to': _to,
+        if (_q.text.trim().isNotEmpty) 'q': _q.text.trim(),
+      });
     } catch (e) {
       _s.error = e;
     }
@@ -125,85 +176,185 @@ class _PayrollScreenState extends State<PayrollScreen> {
   Future<void> _new() async {
     final id = await Navigator.push<int>(context, MaterialPageRoute(builder: (_) => const NewPayrollScreen()));
     await _load();
-    if (id != null && mounted) _openBatch(id);
+    if (id != null && mounted) {
+      await _openInvoice(context, id);
+      _load();
+    }
   }
 
-  Future<void> _openBatch(int id) async {
-    await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => BatchScreen(id: id)));
+  Future<void> _newNote() async {
+    final n = await editNote(context, vendorId: _vendor?.value as int?, vendorName: _vendor?.label);
+    if (n == null || !mounted) return;
+    await _openNote(context, n.intv('note_id'));
+    _load();
+  }
+
+  Future<void> _open(int id) async {
+    await _openInvoice(context, id);
+    _load();
+  }
+
+  Future<void> _openN(int id) async {
+    await _openNote(context, id);
     _load();
   }
 
   @override
   Widget build(BuildContext context) {
-    final rows = _s.data ?? <Json>[];
-    final drafts = rows.where((r) => r.str('status') == 'Generated' && !r.flag('is_finalized')).length;
-    // what is still owed: the balance (invoice + carried in - payments - carried out), not the invoice total
-    final toPay = rows.where((r) => r.str('status') == 'Generated' && r.flag('is_finalized') && r.dbl('balance') > 0).toList();
-    final unpaid = <String, double>{};
-    for (final r in toPay) {
-      unpaid[r.str('currency')] = (unpaid[r.str('currency')] ?? 0) + r.dbl('balance');
-    }
+    final groups = _s.data ?? <Json>[];
+    final all = [for (final g in groups) ...g.list('invoices')];
+    int count(String st) => all.where((i) => i.str('state') == st).length;
     return PageBody(
       onRefresh: _load,
       children: [
-        PageHeader(title: 'Invoices', subtitle: 'Vendor statements per machine, from approved attendance', actions: [
-          Dropdown<String?>(label: 'Status', value: _status, width: 160, items: const [
-            DropdownMenuItem(value: null, child: Text('All')),
-            DropdownMenuItem(value: 'Generated', child: Text('Draft / finalized')),
-            DropdownMenuItem(value: 'Paid', child: Text('Paid')),
-            DropdownMenuItem(value: 'Superseded', child: Text('Superseded')),
-            DropdownMenuItem(value: 'Voided', child: Text('Voided')),
-          ], onChanged: (v) { _status = v; _load(); }),
-          FilledButton.icon(onPressed: _new, icon: const Icon(Icons.add_rounded), label: const Text('New invoice batch')),
+        PageHeader(title: 'Invoices', subtitle: 'Per vendor and machine, for any period, from approved attendance', actions: [
+          if (Auth.I.isAdmin)
+            TextButton.icon(
+              onPressed: () => Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const HandoversScreen())),
+              icon: const Icon(Icons.history_edu_rounded),
+              label: const Text('Hand-over sheets'),
+            ),
+          if (Auth.I.isAdmin)
+            OutlinedButton.icon(
+              onPressed: () async {
+                await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const HandoverScreen()));
+                _load();
+              },
+              icon: const Icon(Icons.outbox_rounded),
+              label: const Text('Hand over to finance'),
+            ),
+          if (_office) OutlinedButton.icon(onPressed: _newNote, icon: const Icon(Icons.post_add_rounded), label: const Text('New debit / credit note')),
+          if (_office) FilledButton.icon(onPressed: _new, icon: const Icon(Icons.add_rounded), label: const Text('New invoice')),
         ]),
+        SectionCard(
+          child: Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            PickerField(label: 'Vendor (all)', width: 230, icon: Icons.business_rounded, valueLabel: _vendor?.label, load: () => Lookups.vendors(),
+                onChanged: (v) { setState(() { _vendor = v; _machine = null; }); _load(); }),
+            PickerField(label: 'Machine (all)', width: 230, icon: Icons.precision_manufacturing_rounded, valueLabel: _machine?.label,
+                load: () => Lookups.machines(vendorId: _vendor?.value as int?), onChanged: (v) { setState(() => _machine = v); _load(); }),
+            DateField(label: 'From', value: _from, width: 165, clearable: true, onChanged: (v) { setState(() => _from = v); _load(); }),
+            DateField(label: 'To', value: _to, width: 165, clearable: true, onChanged: (v) { setState(() => _to = v); _load(); }),
+            Dropdown<String>(label: 'State', value: _state, width: 190, items: const [
+              DropdownMenuItem(value: '', child: Text('All')),
+              DropdownMenuItem(value: 'Active', child: Text('Valid (not cancelled)')),
+              DropdownMenuItem(value: 'Draft', child: Text('Draft')),
+              DropdownMenuItem(value: 'Issued', child: Text('Issued (in the office)')),
+              DropdownMenuItem(value: 'HandedOver', child: Text('Handed over')),
+              DropdownMenuItem(value: 'Returned', child: Text('Withdrawn from finance')),
+              DropdownMenuItem(value: 'Cancelled', child: Text('Cancelled')),
+              DropdownMenuItem(value: 'Replaced', child: Text('Re-issued (old number)')),
+            ], onChanged: (v) { setState(() => _state = v ?? ''); _load(); }),
+            SizedBox(
+              width: 230,
+              child: TextField(
+                controller: _q,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => _load(),
+                decoration: InputDecoration(
+                  labelText: 'Search: number or machine',
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                  suffixIcon: IconButton(icon: const Icon(Icons.arrow_forward_rounded, size: 18), onPressed: _load),
+                ),
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 12),
         Wrap(spacing: 12, runSpacing: 12, children: [
-          KpiTile(label: 'Batches', value: '${rows.length}', icon: Icons.folder_copy_rounded),
-          KpiTile(label: 'Drafts to finalize', value: '$drafts', color: AppColors.standby, icon: Icons.edit_note_rounded),
-          KpiTile(label: 'Finalized, still owed', value: '${toPay.length}', color: AppColors.info, icon: Icons.schedule_rounded),
-          for (final e in unpaid.entries)
-            KpiTile(label: 'To pay (${e.key})', value: Fmt.money(e.value, e.key), color: AppColors.navy, icon: Icons.account_balance_wallet_rounded, width: 220),
+          KpiTile(label: 'Drafts', value: '${count('draft')}', color: AppColors.standby, icon: Icons.edit_note_rounded),
+          KpiTile(label: 'Issued, in the office', value: '${count('issued')}', color: AppColors.info, icon: Icons.receipt_long_rounded, width: 200),
+          KpiTile(label: 'Handed over', value: '${count('handed_over')}', color: AppColors.working, icon: Icons.lock_rounded),
+          if (count('returned') > 0) KpiTile(label: 'Withdrawn from finance', value: '${count('returned')}', color: AppColors.edited, icon: Icons.undo_rounded, width: 220),
         ]),
         const SizedBox(height: 14),
         if (_s.loading && _s.data == null)
           const LoadingView()
         else if (_s.error != null)
           ErrorView(error: _s.error!, onRetry: _load)
+        else if (groups.isEmpty)
+          const Card(child: EmptyView(text: 'No invoice here. Use "New invoice" to create one, or change the filters.', icon: Icons.receipt_long_rounded))
         else
-          TableCard(
-            empty: 'No invoice batch yet. Use "New invoice batch" to calculate one.',
-            columns: const [
-              DataColumn(label: Text('#')), DataColumn(label: Text('Period')), DataColumn(label: Text('Scope')),
-              DataColumn(label: Text('Status')), DataColumn(label: Text('Ver.'), numeric: true), DataColumn(label: Text('Machines'), numeric: true),
-              DataColumn(label: Text('Gross'), numeric: true), DataColumn(label: Text('Deductions'), numeric: true), DataColumn(label: Text('Net'), numeric: true),
-              DataColumn(label: Text('Still owed'), numeric: true), DataColumn(label: Text('Generated')),
-            ],
-            rows: [
-              for (final r in rows)
-                DataRow(
-                  onSelectChanged: (_) => _openBatch(r.intv('eq_batch_id')),
-                  cells: [
-                    DataCell(Text('#${r.str('eq_batch_id')}', style: const TextStyle(fontWeight: FontWeight.w700))),
-                    DataCell(Text('${Fmt.date(r.str('start_date'))} - ${Fmt.date(r.str('end_date'))}')),
-                    DataCell(Text(_scopeText(r))),
-                    DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
-                      Pill(_batchLabel(r.str('status'), r.flag('is_finalized'), r.strOrNull('payment_status')),
-                          color: _batchColor(r.str('status'), r.flag('is_finalized'), r.strOrNull('payment_status'))),
-                      if (r.intv('pending_requests') > 0) ...[const SizedBox(width: 6), const Pill('Request', color: AppColors.standby, icon: Icons.hourglass_top_rounded)],
-                    ])),
-                    DataCell(Text('v${r.str('version_number')}')),
-                    DataCell(Text(r.str('total_equipment'))),
-                    DataCell(Text(Fmt.money2(r.strOrNull('total_gross'), r.str('currency')))),
-                    DataCell(Text(Fmt.money2(r.strOrNull('total_deductions'), r.str('currency')))),
-                    DataCell(Text(Fmt.money2(r.strOrNull('total_net'), r.str('currency')), style: const TextStyle(fontWeight: FontWeight.w800))),
-                    DataCell(Text(
-                        r.str('status') == 'Generated' && r.flag('is_finalized') ? Fmt.money2(r.strOrNull('balance'), r.str('currency')) : '-',
-                        style: TextStyle(fontWeight: FontWeight.w700, color: r.dbl('balance') > 0 ? AppColors.breakdown : AppColors.muted))),
-                    DataCell(Text('${Fmt.date(r.str('generated_at'))}  ${r.str('generated_by')}', style: const TextStyle(color: AppColors.muted, fontSize: 12.5))),
-                  ],
-                ),
-            ],
-          ),
+          for (final g in groups) _vendorCard(g, expanded: groups.length <= 3 || _vendor != null),
       ],
+    );
+  }
+
+  Widget _vendorCard(Json g, {required bool expanded}) {
+    final invoices = g.list('invoices');
+    final general = g.list('general_notes');
+    final notes = invoices.fold<int>(0, (a, i) => a + i.list('notes').length) + general.length;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: PageStorageKey('vendor-${g.str('vendor_id')}'),
+          initiallyExpanded: expanded,
+          leading: const Icon(Icons.business_rounded, color: AppColors.navy),
+          title: Text(g.str('vendor_name'), style: const TextStyle(fontWeight: FontWeight.w800)),
+          subtitle: Text('${invoices.length} invoice(s)${notes == 0 ? '' : '  ·  $notes note(s)'}', style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+          children: [
+            for (final inv in invoices) _invoiceRow(inv),
+            if (general.isNotEmpty) ...[
+              const Padding(
+                padding: EdgeInsets.fromLTRB(12, 10, 12, 4),
+                child: Text('Notes not linked to an invoice', style: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w700, fontSize: 12.5)),
+              ),
+              for (final n in general) _noteRow(n),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _invoiceRow(Json inv) {
+    final st = inv.str('state');
+    final cur = inv.str('currency');
+    final dead = st == 'cancelled' || st == 'replaced';
+    final mis = inv.list('machine_invoices');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(10)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        ListTile(
+          onTap: () => _open(inv.intv('eq_batch_id')),
+          leading: Icon(invoiceStateIcon(st), color: invoiceStateColor(st)),
+          title: Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text(inv.strOrNull('vendor_invoice_no') ?? 'Draft #${inv.str('eq_batch_id')}',
+                style: TextStyle(fontWeight: FontWeight.w800, decoration: dead ? TextDecoration.lineThrough : null)),
+            invoiceStatePill(st),
+            Text('${Fmt.date(inv.str('start_date'))} – ${Fmt.date(inv.str('end_date'))}', style: const TextStyle(fontSize: 13)),
+          ]),
+          subtitle: Text([
+            '${inv.str('machines')} machine(s)',
+            if (mis.isNotEmpty) mis.map((m) => '${m.str('invoice_no')} ${m.str('equipment_code')}').join(', '),
+            if (inv.strOrNull('handover_no') != null) '${inv.str('handover_no')} on ${Fmt.date(inv.str('handed_on'))}',
+          ].join('  ·  '), style: const TextStyle(fontSize: 12.5)),
+          trailing: Text(Fmt.money2(inv.strOrNull('net'), cur),
+              style: TextStyle(fontWeight: FontWeight.w800, color: dead ? AppColors.muted : AppColors.navy)),
+        ),
+        for (final n in inv.list('notes')) Padding(padding: const EdgeInsets.only(left: 40), child: _noteRow(n)),
+      ]),
+    );
+  }
+
+  Widget _noteRow(Json n) {
+    final st = noteState(n.str('status'));
+    return ListTile(
+      dense: true,
+      onTap: () => _openN(n.intv('note_id')),
+      leading: Icon(n.str('kind') == 'Credit' ? Icons.remove_circle_outline_rounded : Icons.add_circle_outline_rounded, color: AppColors.gold),
+      title: Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text(n.str('note_no', 'Draft note'),
+            style: TextStyle(fontWeight: FontWeight.w700, decoration: st == 'cancelled' ? TextDecoration.lineThrough : null)),
+        invoiceStatePill(st),
+        Text('${noteKindText(n.str('kind'))}${n.strOrNull('equipment_code') == null ? '' : '  ·  ${n.str('equipment_code')}'}', style: const TextStyle(fontSize: 12.5)),
+      ]),
+      subtitle: Text(n.str('reason'), maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: Text(noteAmountText(n), style: TextStyle(fontWeight: FontWeight.w700, color: n.str('kind') == 'Credit' ? AppColors.breakdown : AppColors.working)),
     );
   }
 }
@@ -214,14 +365,13 @@ String _scopeText(Json b) {
   final parts = <String>[
     if (b.strOrNull('scope_vendor_name') != null) b.str('scope_vendor_name'),
     if (b.strOrNull('scope_equipment_code') != null) b.str('scope_equipment_code'),
-    // machines chosen by hand (11 Oct 2026)
     if (chosen.isNotEmpty) chosen.map((m) => m.str('equipment_code')).join(', ') else if (count > 0) '$count machines',
     if (b.strOrNull('scope_site_code') != null) b.str('scope_site_code'),
   ];
   return parts.isEmpty ? 'All vendors' : parts.join(' · ');
 }
 
-// =================================================================== new payroll
+// =================================================================== new invoice
 class NewPayrollScreen extends StatefulWidget {
   const NewPayrollScreen({super.key});
   @override
@@ -236,20 +386,18 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
   String? _currency;
 
   bool _busy = false;
-  /// "Add previous balances": unpaid balances of earlier finalized batches of the same vendors move into this batch.
-  bool _carry = false;
   List<Json>? _blockers;
   Json? _preview;
   Object? _previewError;
 
-  // 2. machines of the vendor (11 Oct 2026): what a new batch would take now, what other batches already hold
+  // machines of the vendor: what an invoice would take now, and the invoices already covering part of the period
   List<Json>? _coverage;
   bool _coverageLoading = false;
   final Set<int> _selected = {};
-  /// machines taken out of another DRAFT batch ("Take it"): that draft is voided or recalculated without them
+  /// machines taken out of another DRAFT ("Take it"): that draft is deleted or recalculated without them
   final Set<int> _take = {};
 
-  // 3. terms of the month of the monthly machines chosen
+  // terms of the month of the monthly machines chosen
   List<Json>? _terms;
 
   /// Admin decision on the preview: monthly machines and months whose extra hours cover their missing hours
@@ -260,13 +408,11 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
   void initState() {
     super.initState();
     final now = Fmt.now();
-    final first = DateTime(now.year, now.month - 1, 1);
-    final last = DateTime(now.year, now.month, 0);
-    _from = Fmt.dateOf(first);
-    _to = Fmt.dateOf(last);
+    _from = Fmt.dateOf(DateTime(now.year, now.month - 1, 1));
+    _to = Fmt.dateOf(DateTime(now.year, now.month, 0));
   }
 
-  /// Every machine of the vendor chosen: the batch is the whole vendor (no list); otherwise the machines chosen by hand.
+  /// Every machine of the vendor chosen: the invoice is the whole vendor (no list); otherwise the machines chosen by hand.
   List<int>? get _machineList {
     final cov = _coverage;
     if (_vendor == null || cov == null) return null;
@@ -302,6 +448,8 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     if (reloadMachines) _loadCoverage();
   }
 
+  void _usePeriod(String from, String to) => _changed(() { _from = from; _to = to; }, reloadMachines: true);
+
   Future<void> _loadCoverage() async {
     if (_vendor == null) {
       setState(() { _coverage = null; _selected.clear(); _take.clear(); _terms = null; });
@@ -309,7 +457,8 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     }
     setState(() => _coverageLoading = true);
     try {
-      final rows = await Api.I.getList('/equipment/payroll/coverage', query: {'vendor_id': _vendor!.value, 'start_date': _from, 'end_date': _to});
+      final rows = await Api.I.getList('/equipment/payroll/coverage',
+          query: {'vendor_id': _vendor!.value, 'start_date': _from, 'end_date': _to, if (_site != null) 'site_id': _site!.value});
       if (!mounted) return;
       setState(() {
         _coverage = rows;
@@ -359,9 +508,9 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
   }
 
   Future<void> _takeFromDraft(Json c) async {
-    final drafts = c.list('held_by').where((h) => !h.flag('finalized')).map((h) => '#${h.str('eq_batch_id')}').toSet().join(', ');
-    final ok = await confirmDialog(context, 'Take ${c.str('label')} into this batch?',
-        'Draft $drafts is voided, or recalculated without this machine, when you generate.', confirm: 'Take it');
+    final drafts = c.list('overlaps').map((o) => '#${o.str('eq_batch_id')}').toSet().join(', ');
+    final ok = await confirmDialog(context, 'Take ${c.str('label')} into this invoice?',
+        'Draft $drafts is deleted, or recalculated without this machine, when you create this one. Drafts have no number yet.', confirm: 'Take it');
     if (ok) _toggle(c.intv('equipment_id'), true, take: true);
   }
 
@@ -400,16 +549,14 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     try {
       final body = {
         ..._scope, 'accept_blockers': accept, if (accept && _acceptReason != null) 'accept_reason': _acceptReason, if (currency != null) 'currency': currency,
-        if (_carry && (_preview?.list('carry_forward').isNotEmpty ?? false)) 'carry_forward': true,
       };
       final r = await Api.I.request('POST', '/equipment/payroll/generate', body: body);
       final b = asJson(r['data']);
       final warnings = asJsonList(r['warnings']);
       if (!mounted) return;
-      final carried = warnings.where((w) => w.str('code') == 'PREVIOUS_BALANCES_ADDED').toList();
       final moved = warnings.where((w) => w.str('code') == 'DRAFT_VOIDED' || w.str('code') == 'DRAFT_RECALCULATED').toList();
-      final other = warnings.length - carried.length - moved.length;
-      showSnack(context, 'Batch #${b.str('eq_batch_id')} generated${carried.isEmpty ? '' : '. ${carried.first.str('message')}'}'
+      final other = warnings.length - moved.length;
+      showSnack(context, 'Draft invoice #${b.str('eq_batch_id')} created'
           '${moved.isEmpty ? '' : '. ${moved.map((w) => w.str('message')).join(' ')}'}'
           '${other <= 0 ? '' : ' ($other warning(s))'}.');
       Navigator.pop(context, b.intv('eq_batch_id'));
@@ -419,7 +566,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
       setState(() => _busy = false);
       if (e.code == 'MIXED_CURRENCY') {
         final cur = (e.details?['currencies'] as List?)?.map((x) => '$x').toList() ?? <String>[];
-        final p = await pickFromList(context, 'Several currencies: choose one batch currency', [for (final c in cur) PickOption(c, c)]);
+        final p = await pickFromList(context, 'Several currencies: choose the invoice currency', [for (final c in cur) PickOption(c, c)]);
         if (p != null) await _generate(accept: accept, currency: p.value as String);
         return;
       }
@@ -429,6 +576,10 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
         if (why == null) return;
         _acceptReason = why;
         await _generate(accept: true, currency: currency);
+        return;
+      }
+      if (e.code == 'PERIOD_OVERLAP') {
+        await showOverlapDialog(context, e.details == null ? <Json>[] : e.details!.list('overlaps'), onUse: _usePeriod);
         return;
       }
       showError(context, e);
@@ -446,13 +597,14 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     final items = p == null ? <Json>[] : p.list('items');
     final totals = p == null ? <Json>[] : p.list('totals');
     final warnings = p == null ? <Json>[] : p.list('warnings');
+    final overlaps = p == null ? <Json>[] : p.list('overlaps').where((m) => !_take.contains(m.intv('equipment_id'))).toList();
     var step = 1;
     return Scaffold(
-      appBar: AppBar(title: const Text('New invoice batch')),
+      appBar: AppBar(title: const Text('New invoice')),
       body: PageBody(maxWidth: 1300, children: [
         const SizedBox(height: 16),
         SectionCard(
-          title: '${step++}. Scope',
+          title: '${step++}. Period and vendor',
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Wrap(spacing: 12, runSpacing: 12, children: [
               DateField(label: 'From', value: _from, width: 170, onChanged: (v) => _changed(() => _from = v!, reloadMachines: true)),
@@ -460,7 +612,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
               PickerField(label: 'Vendor (all)', width: 240, icon: Icons.business_rounded, valueLabel: _vendor?.label, load: () => Lookups.vendors(),
                   onChanged: (v) => _changed(() => _vendor = v, reloadMachines: true)),
               PickerField(label: 'Site (all)', width: 220, icon: Icons.location_city_rounded, valueLabel: _site?.label, load: () => Lookups.sites(activeOnly: false),
-                  onChanged: (v) => _changed(() => _site = v)),
+                  onChanged: (v) => _changed(() => _site = v, reloadMachines: true)),
               Dropdown<String?>(label: 'Currency', value: _currency, width: 130, items: const [
                 DropdownMenuItem(value: null, child: Text('Auto')),
                 DropdownMenuItem(value: 'USD', child: Text('USD')),
@@ -471,14 +623,16 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
             const SizedBox(height: 14),
             Wrap(spacing: 8, runSpacing: 8, children: [
               for (final q in _quickRanges())
-                ActionChip(label: Text(q.$1), onPressed: () => _changed(() { _from = q.$2; _to = q.$3; }, reloadMachines: true)),
+                ActionChip(label: Text(q.$1), onPressed: () => _usePeriod(q.$2, q.$3)),
             ]),
-            if (_vendor == null)
-              const Padding(
-                padding: EdgeInsets.only(top: 10),
-                child: Text('Choose a vendor to pick its machines one by one; without a vendor the batch takes every vendor.',
-                    style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
-              ),
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                  _vendor == null
+                      ? 'Choose a vendor to pick its machines one by one; without a vendor the invoice takes every vendor (one vendor invoice each).'
+                      : 'Any period is allowed, as long as the machines have no other invoice on the same days.',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+            ),
           ]),
         ),
         if (_vendor != null) ...[
@@ -487,10 +641,12 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
             title: '${step++}. Machines',
             trailing: Wrap(spacing: 8, children: [
               TextButton(
-                onPressed: _coverage == null ? null : () {
-                  _changed(() => _selected.addAll(_coverage!.where((c) => c.flag('is_ready')).map((c) => c.intv('equipment_id'))));
-                  _loadTerms();
-                },
+                onPressed: _coverage == null
+                    ? null
+                    : () {
+                        _changed(() => _selected.addAll(_coverage!.where((c) => c.flag('is_ready')).map((c) => c.intv('equipment_id'))));
+                        _loadTerms();
+                      },
                 child: const Text('Select all ready'),
               ),
               TextButton(onPressed: () { _changed(() { _selected.clear(); _take.clear(); }); _loadTerms(); }, child: const Text('Clear')),
@@ -510,8 +666,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               const Text('Monthly machines are billed as a normal month (the card\'s monthly price, whatever the number of working days). '
                   'When a month is billed differently for one machine, type an exception here BEFORE the preview: the amount of the month, '
-                  'the days it is divided by, or the hourly price used for deductions and overtime. It is kept on the machine and the month, '
-                  'and it cannot change while a batch bills that month.',
+                  'the days it is divided by, or the hourly price used for deductions and overtime. It is kept on the machine and the month.',
                   style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
               const SizedBox(height: 8),
               for (final t in _terms!)
@@ -539,7 +694,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
         ),
         if (_blockers != null) ...[
           const SizedBox(height: 14),
-          _BlockersCard(blockers: _blockers!),
+          _BlockersCard(blockers: _blockers!, onChanged: _check),
         ],
         if (_previewError != null) ...[
           const SizedBox(height: 14),
@@ -559,23 +714,31 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
             trailing: FilledButton.icon(
               onPressed: _busy || (items.isEmpty && _take.isEmpty) ? null : () => _generate(),
               icon: const Icon(Icons.task_alt_rounded),
-              label: const Text('Generate batch'),
+              label: const Text('Create draft invoice'),
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              if (overlaps.isNotEmpty)
+                NoticeBox(
+                  color: AppColors.breakdown,
+                  icon: Icons.event_busy_rounded,
+                  title: 'Some machines already have an invoice in this period',
+                  text: overlaps.map((m) => '${m.str('label')}: ${m.list('conflicts').map(_conflictText).join(', ')}').join('\n'),
+                  action: TextButton(onPressed: () => showOverlapDialog(context, overlaps, onUse: _usePeriod), child: const Text('Details')),
+                ),
               if (_take.isNotEmpty)
                 NoticeBox(
                   color: AppColors.standby,
                   icon: Icons.move_down_rounded,
-                  text: '${_take.length} machine(s) are in another draft: the preview shows what is free now; on Generate they move into this batch.',
+                  text: '${_take.length} machine(s) are in another draft: the preview shows what is free now; on "Create" they move into this invoice.',
                 ),
-              if (items.isEmpty) const EmptyView(text: 'Nothing payable in this scope and period.', icon: Icons.money_off_rounded),
+              if (items.isEmpty) const EmptyView(text: 'Nothing to invoice in this scope and period.', icon: Icons.money_off_rounded),
               Wrap(spacing: 12, runSpacing: 12, children: [
                 for (final t in totals) ...[
                   KpiTile(label: 'Machines / vendors', value: '${t.str('machines')} / ${t.str('vendors')}', icon: Icons.precision_manufacturing_rounded),
                   KpiTile(label: 'Work hours', value: t.str('work_hours'), icon: Icons.timer_rounded, color: AppColors.working),
                   KpiTile(label: 'Gross (${t.str('currency')})', value: Fmt.money2(t.strOrNull('gross'), t.str('currency')), width: 200),
                   KpiTile(label: 'Deductions', value: Fmt.money2(t.strOrNull('deductions'), t.str('currency')), color: AppColors.breakdown, width: 200),
-                  KpiTile(label: 'Net to pay', value: Fmt.money2(t.strOrNull('net'), t.str('currency')), color: AppColors.navy, width: 220, icon: Icons.account_balance_wallet_rounded),
+                  KpiTile(label: 'Net', value: Fmt.money2(t.strOrNull('net'), t.str('currency')), color: AppColors.navy, width: 220, icon: Icons.account_balance_wallet_rounded),
                 ],
               ]),
               if (warnings.isNotEmpty) ...[
@@ -590,10 +753,6 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
                     ]),
                   ),
               ],
-              if (p.list('carry_forward').isNotEmpty) ...[
-                const SizedBox(height: 12),
-                _CarryCard(list: p.list('carry_forward'), value: _carry, onChanged: (v) => setState(() => _carry = v)),
-              ],
               const SizedBox(height: 12),
               for (final it in items)
                 _ItemTile(
@@ -606,7 +765,7 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
                           _check();
                         }
                       : null,
-                  offsetNote: Auth.I.isAdmin ? null : 'Only the Admin decides this, on the draft before finalizing.',
+                  offsetNote: Auth.I.isAdmin ? null : 'Only the Admin decides this (on the draft or the issued invoice).',
                 ),
             ]),
           ),
@@ -615,12 +774,15 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
     );
   }
 
-  /// One machine of the vendor: ready (selectable), already billed (grey), or in another draft ("Take it").
+  /// One machine of the vendor: ready (selectable), already invoiced on some days (with links and the free parts),
+  /// or in another draft ("Take it").
   Widget _machineRow(Json c) {
     final id = c.intv('equipment_id');
     final selected = _selected.contains(id);
     final ready = c.flag('is_ready');
-    final inDraft = c.list('in_draft').isNotEmpty;
+    final overlaps = c.list('overlaps');
+    final onlyDrafts = overlaps.isNotEmpty && overlaps.every((o) => o.str('state') == 'draft');
+    final taken = _take.contains(id);
     final r = c.obj('ready');
     final readyText = [
       if (r.intv('rows') > 0) '${r.intv('rows')} day(s)',
@@ -629,27 +791,55 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
       if (r.intv('adjustments') > 0) '${r.intv('adjustments')} adjustment(s)',
       if (r.intv('dnr') > 0) '${r.intv('dnr')} delivery note(s)',
     ].join(', ');
-    final held = c.list('held_by').map((h) => '${h.flag('finalized') ? 'billed' : 'in draft'} ${Fmt.date(h.str('first_day'))}–${Fmt.date(h.str('last_day'))} by #${h.str('eq_batch_id')}').join(' · ');
     final blockers = c.obj('blockers');
     final mode = const {'Hourly': 'Hourly', 'Daily': 'Daily', 'Monthly': 'Monthly'}[c.str('billing_mode')] ?? (c.strOrNull('billing_mode') ?? 'DNR / no card');
-    final selectable = ready || _take.contains(id);
-    return ListTile(
-      dense: true,
-      contentPadding: EdgeInsets.zero,
-      leading: Checkbox(value: selected, onChanged: selectable ? (v) => _toggle(id, v ?? false) : null),
-      title: Text('${c.str('label')}${c.strOrNull('plate') == null ? '' : '  ·  ${c.str('plate')}'}',
-          style: TextStyle(fontWeight: FontWeight.w700, color: selectable ? AppColors.ink : AppColors.muted)),
-      subtitle: Text([
-        mode,
-        if (held.isNotEmpty) held,
-        ready ? 'ready: $readyText' : (inDraft ? 'everything is in a draft' : 'nothing to bill'),
-        if (blockers.isNotEmpty) 'problems: ${blockers.entries.map((e) => '${e.key.replaceAll('_', ' ')} ${e.value}').join(', ')}',
-      ].join('  ·  '), style: const TextStyle(fontSize: 12.5)),
-      trailing: inDraft && !_take.contains(id)
-          ? TextButton.icon(onPressed: () => _takeFromDraft(c), icon: const Icon(Icons.move_down_rounded, size: 18), label: const Text('Take it'))
-          : _take.contains(id)
-              ? const Pill('Taken from draft', color: AppColors.standby)
-              : null,
+    final selectable = ready || taken;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Checkbox(value: selected, onChanged: selectable ? (v) => _toggle(id, v ?? false) : null),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${c.str('label')}${c.strOrNull('plate') == null ? '' : '  ·  ${c.str('plate')}'}',
+                  style: TextStyle(fontWeight: FontWeight.w700, color: selectable ? AppColors.ink : AppColors.muted)),
+              Text([
+                mode,
+                if (overlaps.isEmpty) (ready ? 'ready: $readyText' : 'nothing to invoice') else if (readyText.isNotEmpty) 'to invoice: $readyText',
+                if (blockers.isNotEmpty) 'problems: ${blockers.entries.map((e) => '${e.key.replaceAll('_', ' ')} ${e.value}').join(', ')}',
+              ].join('  ·  '), style: const TextStyle(fontSize: 12.5)),
+            ]),
+          ),
+          if (onlyDrafts && !taken)
+            TextButton.icon(onPressed: () => _takeFromDraft(c), icon: const Icon(Icons.move_down_rounded, size: 18), label: const Text('Take it'))
+          else if (taken)
+            const Pill('Taken from draft', color: AppColors.standby),
+        ]),
+        if (overlaps.isNotEmpty && !taken)
+          Padding(
+            padding: const EdgeInsets.only(left: 48),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              for (final o in overlaps)
+                Row(children: [
+                  Icon(invoiceStateIcon(o.str('state')), size: 16, color: invoiceStateColor(o.str('state'))),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text('Already in ${_conflictText(o)}', style: const TextStyle(fontSize: 12.5))),
+                  TextButton(onPressed: () => _openInvoice(context, o.intv('eq_batch_id')), child: const Text('Open')),
+                ]),
+              Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                const Text('Free:', style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
+                if (c.list('free').isEmpty) const Text('nothing in this period', style: TextStyle(fontSize: 12.5)),
+                for (final f in c.list('free'))
+                  ActionChip(
+                    visualDensity: VisualDensity.compact,
+                    avatar: const Icon(Icons.event_available_rounded, size: 16, color: AppColors.working),
+                    label: Text('${Fmt.date(f.str('from'))} – ${Fmt.date(f.str('to'))}'),
+                    onPressed: () => _usePeriod(f.str('from'), f.str('to')),
+                  ),
+              ]),
+            ]),
+          ),
+      ]),
     );
   }
 
@@ -659,14 +849,159 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
       ('Last month', Fmt.dateOf(DateTime(n.year, n.month - 1, 1)), Fmt.dateOf(DateTime(n.year, n.month, 0))),
       ('This month', Fmt.dateOf(DateTime(n.year, n.month, 1)), Fmt.dateOf(DateTime(n.year, n.month + 1, 0))),
       ('1st half', Fmt.dateOf(DateTime(n.year, n.month, 1)), Fmt.dateOf(DateTime(n.year, n.month, 15))),
+      ('2nd half', Fmt.dateOf(DateTime(n.year, n.month, 16)), Fmt.dateOf(DateTime(n.year, n.month + 1, 0))),
     ];
   }
 }
 
+/// What blocks an invoice, with the rows listed. Rows not approved yet are approved or rejected right here (Admin), or
+/// opened to be fixed; any other row opens too. [onChanged] runs after a change (the caller checks again).
+class _BlockersCard extends StatefulWidget {
+  const _BlockersCard({required this.blockers, required this.onChanged, this.title = 'Problems in this scope'});
+  final List<Json> blockers;
+  final VoidCallback onChanged;
+  final String title;
+  @override
+  State<_BlockersCard> createState() => _BlockersCardState();
+}
+
+class _BlockersCardState extends State<_BlockersCard> {
+  bool _busy = false;
+
+  Future<void> _run(Future<dynamic> Function() fn, String verb) async {
+    setState(() => _busy = true);
+    try {
+      final r = asJson(await fn());
+      if (!mounted) return;
+      final done = (r[verb] is List) ? (r[verb] as List).length : 0;
+      final skipped = r.list('skipped');
+      showSnack(context, '$done row(s) $verb${skipped.isEmpty ? '' : '; ${skipped.length} skipped: ${skipped.map((s) => s.str('message', s.str('reason'))).toSet().join('; ')}'}.',
+          error: skipped.isNotEmpty && done == 0);
+      widget.onChanged();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _approve(List<int> ids) => _run(() => Api.I.post('/equipment/admin/attendance/approve', {'ids': ids}), 'approved');
+
+  Future<void> _reject(List<int> ids) async {
+    final why = await promptText(context, ids.length == 1 ? 'Reject this row?' : 'Reject ${ids.length} rows?',
+        label: 'Why? (the supervisor sees it and fixes the row)', minLength: 3, confirm: 'Reject');
+    if (why == null) return;
+    _run(() => Api.I.post('/equipment/admin/attendance/reject', {'ids': ids, 'notes': why}), 'rejected');
+  }
+
+  Future<void> _open(int id) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => AttendanceDetailSheet(id: id),
+    );
+    widget.onChanged();
+  }
+
+  String _rowText(Json i) => [
+        if (i.strOrNull('sheet_code') != null) '${i.str('sheet_code')} rows to ${i.str('needed_row')}, uploaded to ${i.str('scanned_row')}',
+        i.str('equipment_code'),
+        if (i.strOrNull('site_code') != null) i.str('site_code'),
+        Fmt.date(i.strOrNull('record_date') ?? i.strOrNull('issue_date')),
+      ].join(' · ');
+
+  Widget _notApproved(Json b) {
+    final items = b.list('items');
+    final submitted = items.where((i) => i.str('status') == 'Submitted').map((i) => i.intv('eq_attendance_id')).toList();
+    final admin = Auth.I.isAdmin;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (admin && submitted.length > 1)
+        Wrap(spacing: 8, children: [
+          FilledButton.icon(
+            onPressed: _busy ? null : () => _approve(submitted),
+            icon: const Icon(Icons.done_all_rounded, size: 18),
+            label: Text('Approve all submitted (${submitted.length})'),
+          ),
+        ]),
+      for (final i in items.take(100))
+        Row(children: [
+          Expanded(child: Text(_rowText(i), style: const TextStyle(fontSize: 13))),
+          StatePillText(i.str('status')),
+          IconButton(tooltip: 'Open the row', onPressed: _busy || i.intOrNull('eq_attendance_id') == null ? null : () => _open(i.intv('eq_attendance_id')), icon: const Icon(Icons.open_in_new_rounded, size: 18)),
+          if (admin && i.str('status') == 'Submitted') ...[
+            IconButton(tooltip: 'Approve', onPressed: _busy ? null : () => _approve([i.intv('eq_attendance_id')]), icon: const Icon(Icons.check_circle_rounded, size: 20, color: AppColors.working)),
+            IconButton(tooltip: 'Reject (with a reason)', onPressed: _busy ? null : () => _reject([i.intv('eq_attendance_id')]), icon: const Icon(Icons.cancel_rounded, size: 20, color: AppColors.breakdown)),
+          ],
+        ]),
+      if (items.length > 100) Text('+${items.length - 100} more (Attendance review)', style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+      if (items.any((i) => i.str('status') == 'Draft'))
+        const Text('Draft rows: the supervisor has not submitted them yet (or open one and fix it).', style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final blockers = widget.blockers;
+    if (blockers.isEmpty) {
+      return const Card(
+        color: Color(0xFFE8F5EE),
+        child: ListTile(
+          leading: Icon(Icons.verified_rounded, color: AppColors.working),
+          title: Text('No blockers', style: TextStyle(fontWeight: FontWeight.w700)),
+          subtitle: Text('Every row of this scope is approved, closed and reconciled.'),
+        ),
+      );
+    }
+    return SectionCard(
+      title: widget.title,
+      trailing: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : null,
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      child: Column(children: [
+        for (final b in blockers)
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              initiallyExpanded: b.str('code') == 'NOT_APPROVED',
+              leading: Icon(_isInfo(b) ? Icons.info_outline_rounded : Icons.block_rounded, color: _isInfo(b) ? AppColors.info : AppColors.breakdown),
+              title: Text('${b.str('message')}  (${b.str('count')})', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+              subtitle: Text(_blockerHelp[b.str('code')] ?? '', style: const TextStyle(fontSize: 12.5)),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              children: [
+                if (b.str('code') == 'NOT_APPROVED')
+                  _notApproved(b)
+                else
+                  Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (final i in b.list('items').take(60))
+                      i.intOrNull('eq_attendance_id') == null
+                          ? Pill(_rowText(i), color: AppColors.ink, outlined: true)
+                          : InkWell(
+                              borderRadius: BorderRadius.circular(20),
+                              onTap: _busy ? null : () => _open(i.intv('eq_attendance_id')),
+                              child: Pill(_rowText(i), color: AppColors.navy, outlined: true, icon: Icons.open_in_new_rounded),
+                            ),
+                    if (b.list('items').length > 60) Pill('+${b.list('items').length - 60} more'),
+                  ]),
+              ],
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+/// Status of an attendance row as a small pill (Submitted / Draft / Rejected).
+class StatePillText extends StatelessWidget {
+  const StatePillText(this.status, {super.key});
+  final String status;
+  @override
+  Widget build(BuildContext context) => Pill(status, color: switch (status) { 'Rejected' => AppColors.breakdown, 'Draft' => AppColors.neutral, _ => AppColors.standby });
+}
+
 /// One monthly machine x month on New payroll (12 Oct 2026): a NORMAL month by default (the card's monthly price divided
 /// by the working days of the month), or an EXCEPTION typed for this machine and month: the amount of the month, the days
-/// it is divided by and / or the hourly price. Saved when a field is left; ↺ goes back to a normal month. Locked while a
-/// batch (draft or finalized) bills the month: void the draft first.
+/// it is divided by and / or the hourly price. Saved when a field is left; ↺ goes back to a normal month. Locked only
+/// while an invoice handed over to finance bills the month (14 Oct 2026); drafts and issued invoices follow the change.
 class _MonthTermsTile extends StatefulWidget {
   const _MonthTermsTile({super.key, required this.row, required this.onSaved});
   final Json row;
@@ -801,7 +1136,7 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
             padding: const EdgeInsets.only(right: 6),
             child: exception ? const Pill('Exception for this month', color: AppColors.edited) : const Pill('Normal month', color: AppColors.working),
           ),
-          if (locked) Pill('${r.flag('locked_by_finalized') ? 'Finalized' : 'Draft'} #${r.str('locked_by_batch_id')}', color: AppColors.navy, icon: Icons.lock_rounded),
+          if (locked) Pill('${r.str('locked_state') == 'returned' ? 'Withdrawn' : 'Handed over'} #${r.str('locked_by_batch_id')}', color: AppColors.navy, icon: Icons.lock_rounded),
         ]),
         const SizedBox(height: 4),
         Text('Card: ${Fmt.money2(r.strOrNull('monthly_rate'), cur)} per month · ${r.str('hours_per_day')} h per working day · '
@@ -835,9 +1170,9 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
           padding: const EdgeInsets.only(top: 4),
           child: Text(
             locked
-                ? (r.flag('locked_by_finalized')
-                    ? 'A finalized batch bills this month: undo its Finalize (then void it) to change the exception, or settle a difference with an official Correction.'
-                    : 'Draft #${r.str('locked_by_batch_id')} bills this month: void that draft first, change the exception, then generate again.')
+                ? (r.str('locked_state') == 'returned'
+                    ? 'Invoice #${r.str('locked_by_batch_id')} bills this month and is withdrawn from finance: only the Admin changes it now.'
+                    : 'Invoice #${r.str('locked_by_batch_id')} bills this month and is handed over to finance: withdraw it first (Admin), or make a debit / credit note.')
                 : 'Examples: the vendor is paid the 27th day → amount = price x 27 / 26, divided by 27. A special price agreed for one month → type the amount. '
                     'Leave everything as it is for a normal month.',
             style: const TextStyle(fontSize: 12, color: AppColors.muted),
@@ -848,109 +1183,9 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
   }
 }
 
-/// Unpaid balances of earlier finalized batches of the same vendors, offered on New payroll.
-/// Where a carried balance comes from: an older batch, or an opening balance entered for money owed before the system.
-String _carrySource(Json c) {
-  if (c.str('kind') == 'opening') {
-    final period = c.strOrNull('start_date') == null ? '' : ' ${Fmt.date(c.str('start_date'))} - ${Fmt.date(c.str('end_date'))}';
-    return 'opening balance$period${c.strOrNull('equipment_code') == null ? '' : ' (${c.str('equipment_code')})'}: ${c.str('description')}';
-  }
-  return 'batch #${c.str('from_batch_id')} (${Fmt.date(c.str('start_date'))} - ${Fmt.date(c.str('end_date'))})';
-}
-
-class _CarryCard extends StatelessWidget {
-  const _CarryCard({required this.list, required this.value, required this.onChanged});
-  final List<Json> list;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final totals = <String, double>{};
-    for (final c in list) {
-      totals[c.str('currency')] = (totals[c.str('currency')] ?? 0) + c.dbl('amount');
-    }
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.edited.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.edited.withValues(alpha: 0.3)),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        CheckboxListTile(
-          contentPadding: EdgeInsets.zero,
-          value: value,
-          onChanged: (v) => onChanged(v ?? false),
-          title: Text('Add previous balances (${totals.entries.map((e) => Fmt.money(e.value, e.key)).join(' + ')})', style: const TextStyle(fontWeight: FontWeight.w800)),
-          subtitle: const Text('These vendors are still owed money on earlier finalized invoices, or have an opening balance from before the system. '
-              'Ticked: the balances move into this batch and are paid here (the old invoices are closed as "carried forward"). '
-              'Not ticked: they stay where they are.'),
-        ),
-        for (final c in list)
-          Padding(
-            padding: const EdgeInsets.only(left: 8, top: 2),
-            child: Text('${c.str('vendor_name')}  ·  ${_carrySource(c)}'
-                '${c.strOrNull('invoice_no') == null ? '' : '  ·  ${c.str('invoice_no')}'}  ·  ${Fmt.money2(c.strOrNull('amount'), c.str('currency'))}',
-                style: const TextStyle(fontSize: 13)),
-          ),
-      ]),
-    );
-  }
-}
-
-class _BlockersCard extends StatelessWidget {
-  const _BlockersCard({required this.blockers});
-  final List<Json> blockers;
-
-  @override
-  Widget build(BuildContext context) {
-    if (blockers.isEmpty) {
-      return Card(
-        color: const Color(0xFFE8F5EE),
-        child: const ListTile(
-          leading: Icon(Icons.verified_rounded, color: AppColors.working),
-          title: Text('No blockers', style: TextStyle(fontWeight: FontWeight.w700)),
-          subtitle: Text('Every row of this scope is approved, closed and reconciled.'),
-        ),
-      );
-    }
-    return SectionCard(
-      title: 'Problems in this scope',
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-      child: Column(children: [
-        for (final b in blockers)
-          Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              leading: Icon(_isInfo(b) ? Icons.info_outline_rounded : Icons.block_rounded,
-                  color: _isInfo(b) ? AppColors.info : AppColors.breakdown),
-              title: Text('${b.str('message')}  (${b.str('count')})', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-              subtitle: Text(_blockerHelp[b.str('code')] ?? '', style: const TextStyle(fontSize: 12.5)),
-              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-              children: [
-                Wrap(spacing: 6, runSpacing: 6, children: [
-                  for (final i in b.list('items').take(60))
-                    Pill([
-                      if (i.strOrNull('sheet_code') != null) '${i.str('sheet_code')} rows to ${i.str('needed_row')}, uploaded to ${i.str('scanned_row')}',
-                      i.str('equipment_code'),
-                      if (i.strOrNull('site_code') != null) i.str('site_code'),
-                      Fmt.date(i.strOrNull('record_date') ?? i.strOrNull('issue_date')),
-                      if (i.strOrNull('status') != null && b.str('code') == 'NOT_APPROVED') i.str('status'),
-                    ].join(' · '), color: AppColors.ink, outlined: true),
-                  if (b.list('items').length > 60) Pill('+${b.list('items').length - 60} more'),
-                ]),
-              ],
-            ),
-          ),
-      ]),
-    );
-  }
-}
-
 /// One machine line of a preview / batch with its calculation lines.
 class _ItemTile extends StatelessWidget {
-  const _ItemTile({required this.item, this.preview = false, this.onRows, this.onPdf, this.onFuelPdf, this.onCorrect,
+  const _ItemTile({required this.item, this.preview = false, this.onRows, this.onPdf, this.onExcel, this.onFuelPdf, this.onNote,
       this.offsetKeys = const <String>{}, this.onOffset, this.offsetNote});
   final Json item;
   final bool preview;
@@ -960,9 +1195,11 @@ class _ItemTile extends StatelessWidget {
   final void Function(String key, bool on)? onOffset;
   final String? offsetNote;
   final VoidCallback? onRows;
-  /// finalized batch: official correction of money on this item (fuel, rate card, other)
-  final VoidCallback? onCorrect;
   final VoidCallback? onPdf;
+  /// the machine's payment certificate (Excel)
+  final VoidCallback? onExcel;
+  /// a debit / credit note for this machine, linked to the invoice
+  final VoidCallback? onNote;
   final VoidCallback? onFuelPdf;
 
   @override
@@ -1071,14 +1308,15 @@ class _ItemTile extends StatelessWidget {
                   ]),
                 ),
             ],
-            if (onRows != null || onPdf != null || onFuelPdf != null || onCorrect != null)
+            if (onRows != null || onPdf != null || onExcel != null || onFuelPdf != null || onNote != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Wrap(spacing: 8, children: [
-                  if (onRows != null) TextButton.icon(onPressed: onRows, icon: const Icon(Icons.list_alt_rounded, size: 18), label: const Text('Daily rows')),
+                  if (onRows != null) TextButton.icon(onPressed: onRows, icon: const Icon(Icons.list_alt_rounded, size: 18), label: const Text('Days')),
                   if (onPdf != null) TextButton.icon(onPressed: onPdf, icon: const Icon(Icons.picture_as_pdf_rounded, size: 18), label: const Text('Machine invoice')),
                   if (onFuelPdf != null) TextButton.icon(onPressed: onFuelPdf, icon: const Icon(Icons.local_gas_station_rounded, size: 18), label: const Text('Fuel difference statement')),
-                  if (onCorrect != null) TextButton.icon(onPressed: onCorrect, icon: const Icon(Icons.gavel_rounded, size: 18), label: const Text('Official correction')),
+                  if (onExcel != null) TextButton.icon(onPressed: onExcel, icon: const Icon(Icons.grid_on_rounded, size: 18), label: const Text('Excel certificate')),
+                  if (onNote != null) TextButton.icon(onPressed: onNote, icon: const Icon(Icons.post_add_rounded, size: 18), label: const Text('Debit / credit note')),
                 ]),
               ),
           ],
@@ -1216,7 +1454,7 @@ class _Td extends StatelessWidget {
       );
 }
 
-// =================================================================== batch detail
+// =================================================================== invoice detail
 class BatchScreen extends StatefulWidget {
   const BatchScreen({super.key, required this.id});
   final int id;
@@ -1225,9 +1463,16 @@ class BatchScreen extends StatefulWidget {
 }
 
 class _BatchScreenState extends State<BatchScreen> {
+  /// The batch shown: an issued invoice brought up to date gets a new internal id (same numbers).
+  late int _id = widget.id;
   Json? _b;
   Object? _error;
   bool _busy = false;
+  bool _refreshing = false;
+  /// Why the invoice could not be brought up to date by itself (rows not approved, month linked...).
+  ApiException? _refreshError;
+  /// Rows of the period not approved yet (from an issue / refresh refusal): approved or rejected right here.
+  List<Json>? _blockers;
 
   @override
   void initState() {
@@ -1237,24 +1482,52 @@ class _BatchScreenState extends State<BatchScreen> {
 
   Future<void> _load() async {
     try {
-      final b = await Api.I.getObj('/equipment/payroll/batches/${widget.id}');
+      var b = await Api.I.getObj('/equipment/payroll/batches/$_id');
+      // an old calculation (opened from an old link, or replaced while printing): show the current one
+      if (b.str('state') == 'superseded') {
+        final chain = await Api.I.getList('/equipment/payroll/batches/$_id/versions');
+        final cur = chain.lastWhere((v) => v.str('state') != 'superseded', orElse: () => b);
+        if (cur.intv('eq_batch_id') != _id) {
+          _id = cur.intv('eq_batch_id');
+          b = await Api.I.getObj('/equipment/payroll/batches/$_id');
+        }
+      }
+      // an issued invoice still in the office is kept up to date silently, with the same numbers (the audit keeps it)
+      if (b.flag('needs_refresh') && b.obj('actions').flag('refresh') && !_refreshing) {
+        _refreshing = true;
+        try {
+          b = asJson(await Api.I.post('/equipment/payroll/batches/$_id/refresh'));
+          _id = b.intv('eq_batch_id', _id);
+          _refreshError = null;
+          _blockers = null;
+        } on ApiException catch (e) {
+          _refreshError = e;
+          if (e.code == 'ROWS_NOT_APPROVED') _blockers = e.details?.list('blockers');
+        } finally {
+          _refreshing = false;
+        }
+      } else if (!b.flag('needs_refresh')) {
+        _refreshError = null;
+      }
       if (mounted) setState(() { _b = b; _error = null; });
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
   }
 
-  Future<void> _act(Future<dynamic> Function() fn, String ok, {bool reloadOther = false}) async {
+  /// Runs an action; a result that is another batch (new calculation, re-issue) becomes the one shown.
+  Future<void> _act(Future<dynamic> Function() fn, String ok) async {
     setState(() => _busy = true);
     try {
       final r = await fn();
       if (!mounted) return;
+      if (r is Map && asJson(r).intOrNull('eq_batch_id') != null) _id = asJson(r).intv('eq_batch_id');
       showSnack(context, ok);
-      if (reloadOther && r is Map && asJson(r).intOrNull('eq_batch_id') != null && asJson(r).intv('eq_batch_id') != widget.id) {
-        Navigator.pushReplacement(context, MaterialPageRoute<void>(builder: (_) => BatchScreen(id: asJson(r).intv('eq_batch_id'))));
-        return;
-      }
       await _load();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'ROWS_NOT_APPROVED') setState(() => _blockers = e.details?.list('blockers'));
+      showError(context, e);
     } catch (e) {
       if (mounted) showError(context, e);
     } finally {
@@ -1262,18 +1535,21 @@ class _BatchScreenState extends State<BatchScreen> {
     }
   }
 
-  /// Shows the manual changes this batch pays; true when the person confirms they checked them.
+  String get _no => _b?.strOrNull('vendor_invoice_no') ?? 'Draft #$_id';
+
+  // ------------------------------------------------------------- draft
+  /// Shows the manual changes this invoice pays; true when the person confirms they checked them.
   Future<bool> _reviewChanges(List<Json> items) async {
     var checked = false;
     final r = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) => AlertDialog(
-          title: Text('Check ${items.length} manual change(s) before finalizing'),
+          title: Text('Check ${items.length} manual change(s) before issuing'),
           content: SizedBox(
             width: 560,
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const Text('This batch pays changes made by hand. Once finalized, they can only be changed by an official Correction.',
+              const Text('This invoice pays changes made by hand. Check them before the invoice gets its number.',
                   style: TextStyle(color: AppColors.muted, fontSize: 13)),
               const SizedBox(height: 10),
               Flexible(
@@ -1301,7 +1577,7 @@ class _BatchScreenState extends State<BatchScreen> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(onPressed: checked ? () => Navigator.pop(ctx, true) : null, child: const Text('Finalize')),
+            FilledButton(onPressed: checked ? () => Navigator.pop(ctx, true) : null, child: const Text('Issue')),
           ],
         ),
       ),
@@ -1309,10 +1585,11 @@ class _BatchScreenState extends State<BatchScreen> {
     return r ?? false;
   }
 
-  Future<void> _finalize() async {
+  /// Draft -> Issued: official numbers (VI for the vendor, MI per machine, FD per fuel difference).
+  Future<void> _issue() async {
     var ack = false;
     try {
-      final summary = await Api.I.getObj('/equipment/payroll/batches/${widget.id}/review-summary');
+      final summary = await Api.I.getObj('/equipment/payroll/batches/$_id/review-summary');
       if (!mounted) return;
       final items = summary.list('items');
       if (items.isNotEmpty) {
@@ -1325,413 +1602,105 @@ class _BatchScreenState extends State<BatchScreen> {
     }
     if (!ack) {
       if (!mounted) return;
-      final ok = await confirmDialog(context, 'Finalize batch #${widget.id}?',
-          'The rows, fuel and adjustments of this batch are locked. Later changes need an official Correction.', confirm: 'Finalize');
+      final ok = await confirmDialog(context, 'Issue this invoice?',
+          'It gets its official numbers (VI for the vendor, MI for each machine). It stays in the office: a change to its days is '
+          'brought into it with the same number until it is handed over to finance.', confirm: 'Issue');
       if (!ok) return;
     }
     setState(() => _busy = true);
     try {
-      await Api.I.patch('/equipment/payroll/batches/${widget.id}/finalize', {'acknowledge_changes': ack});
-      if (mounted) showSnack(context, 'Batch finalized. Invoice numbers issued.');
+      await Api.I.patch('/equipment/payroll/batches/$_id/finalize', {'acknowledge_changes': ack});
+      _blockers = null;
       await _load();
+      if (mounted) showSnack(context, 'Invoice issued: $_no');
     } on ApiException catch (e) {
       if (!mounted) return;
-      if (e.code == 'SCAN_MISSING') {
-        final sheets = e.details == null ? <Json>[] : e.details!.list('sheets');
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Signed sheets missing'),
-            content: SizedBox(
-              width: 460,
-              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('The accountant must upload the signed monthly sheet (Paper sheets) up to these rows before the batch can be finalized:'),
-                const SizedBox(height: 10),
-                for (final sh in sheets)
-                  ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.description_rounded, color: AppColors.standby),
-                    title: Text('${sh.str('sheet_code')}  ·  ${sh.str('equipment_code')} at ${sh.str('site_code')}'),
-                    subtitle: Text('Rows up to ${sh.str('needed_row')} needed, uploaded up to ${sh.str('scanned_row')}'),
-                  ),
-              ]),
-            ),
-            actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
-          ),
-        );
+      if (e.code == 'ROWS_NOT_APPROVED') {
+        setState(() => _blockers = e.details?.list('blockers'));
+        showSnack(context, e.message, error: true);
       } else if (e.code == 'CHANGES_NOT_ACKNOWLEDGED') {
-        // something changed meanwhile: show the current list again
         final items = e.details == null ? <Json>[] : e.details!.list('items');
         setState(() => _busy = false);
         if (items.isNotEmpty && await _reviewChanges(items)) {
-          await _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/finalize', {'acknowledge_changes': true}), 'Batch finalized. Invoice numbers issued.');
+          await _act(() => Api.I.patch('/equipment/payroll/batches/$_id/finalize', {'acknowledge_changes': true}), 'Invoice issued.');
         }
       } else {
-        showError(context, e);
+        if (e.code == 'BATCH_STALE') await _load();
+        if (mounted) showError(context, e);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _markPaid() async {
-    final hours = _b?.obj('paid_undo').intOrNull('window_hours');
-    final owed = _b?.obj('settlement').obj('totals').strOrNull('balance');
-    final ref = await promptText(context, 'Mark batch #${widget.id} as paid?',
-        label: 'Payment reference (bank transfer / cheque no.), optional',
-        required: false,
-        maxLines: 1,
-        confirm: 'Mark paid',
-        help: 'Pays the REMAINING balance of every vendor${owed == null ? '' : ' (${Fmt.money2(owed, _b!.str('currency'))})'}: '
-            'one payment voucher per vendor; partial payments already made stay as they are. '
-            'Without a payment reference, a mistake can be undone${hours == null ? ' for a limited time' : ' within $hours hours'}. '
-            'Once a reference is recorded, the payment is final: differences go through an official Correction.');
-    if (ref == null) return;
-    _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/mark-paid', {'paid_at': Fmt.nowWall(), if (ref.isNotEmpty) 'payment_reference': ref}),
-        'Marked as paid.');
-  }
-
-  // ------------------------------------------------------------- payments (partial payments, vouchers, statement)
-  Future<void> _recordPayment(Json vendor) async {
-    final cur = _b!.str('currency');
-    final amount = TextEditingController(text: vendor.str('balance'));
-    final reference = TextEditingController();
-    final note = TextEditingController();
-    var paidOn = Fmt.today();
-    var method = 'BankTransfer';
-    final r = await showFormDialog<Json>(
-      context,
-      title: 'Payment to ${vendor.str('vendor_name')}',
-      width: 500,
-      saveLabel: 'Record payment',
-      onSave: () async {
-        final n = numOrNull(amount);
-        if (n == null || n <= 0) throw ApiException(null, 'VALIDATION', 'Type the amount paid.');
-        if (n > vendor.dbl('balance') + 0.0001) throw ApiException(null, 'OVERPAYMENT', 'The amount is more than the balance (${Fmt.money2(vendor.strOrNull('balance'), cur)}).');
-        return asJson(await Api.I.request('POST', '/equipment/payroll/batches/${widget.id}/payments', body: {
-          'vendor_id': vendor.intv('vendor_id'), 'amount': n, 'paid_on': paidOn, 'method': method,
-          if (textOrNull(reference) != null) 'reference': textOrNull(reference), if (textOrNull(note) != null) 'note': textOrNull(note),
-        }));
-      },
-      body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text('Invoice ${vendor.str('invoice_no', '-')}  ·  still owed ${Fmt.money2(vendor.strOrNull('balance'), cur)}',
-            style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.navy)),
-        const SizedBox(height: 4),
-        const Text('The invoice is not changed. A payment voucher is issued, and the statement of account shows what is left. '
-            'When nothing is left on the batch, it becomes Paid by itself.', style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
-        const SizedBox(height: 14),
-        FormGrid(children: [
-          textField(amount, 'Amount paid ($cur)', number: true, required: true),
-          DateField(label: 'Payment date', value: paidOn, last: Fmt.today(), onChanged: (v) => set(() => paidOn = v ?? paidOn)),
-          Dropdown<String>(label: 'Method', value: method, width: null, items: [
-            for (final e in _payMethods.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
-          ], onChanged: (v) => set(() => method = v ?? method)),
-          textField(reference, 'Reference (transfer / cheque no.)'),
-        ]),
-        const SizedBox(height: 12),
-        textField(note, 'Note', maxLines: 2),
-      ]),
-    );
-    if (r == null || !mounted) return;
-    final p = r.obj('payment');
-    await _load();
-    if (!mounted) return;
-    final open = await confirmDialog(context, 'Payment recorded: ${p.str('voucher_no')}',
-        '${Fmt.money2(p.strOrNull('amount'), cur)} paid. Still owed to ${vendor.str('vendor_name')}: ${Fmt.money2(p.strOrNull('balance_after'), cur)}.\n\nOpen the payment voucher to print it?',
-        confirm: 'Open voucher');
-    if (open && mounted) _voucherPdf(p);
-  }
-
-  void _voucherPdf(Json p) => PdfViewScreen.open(context,
-      title: 'Payment voucher ${p.str('voucher_no')}',
-      fileName: '${p.str('voucher_no')}.pdf',
-      load: () => Api.I.getBytes('/equipment/payroll/payments/${p.intv('payment_id')}/voucher.pdf'));
-
-  void _statementPdf(Json vendor) => PdfViewScreen.open(context,
-      title: 'Statement of account - ${vendor.str('vendor_name')}',
-      fileName: 'statement-${vendor.str('invoice_no', 'batch-${widget.id}')}.pdf',
-      load: () => Api.I.getBytes('/equipment/payroll/batches/${widget.id}/statement.pdf', query: {'vendor_id': vendor.intv('vendor_id')}));
-
-  Future<void> _reversePayment(Json p) async {
-    final reason = await promptText(context, 'Reverse payment ${p.str('voucher_no')}?',
-        label: 'Why? (printed on the voucher, kept in the history)', minLength: 5, confirm: 'Reverse', help: 'The voucher is kept and marked REVERSED; the amount is owed again.');
-    if (reason == null) return;
-    _act(() => Api.I.patch('/equipment/payroll/payments/${p.intv('payment_id')}/reverse', {'reason': reason}), 'Payment reversed.');
-  }
-
-  Widget _paymentsCard(Json b) {
-    final st = b.obj('settlement');
-    final cur = b.str('currency');
-    final vendors = st.list('vendors');
-    final canPay = b.str('status') == 'Generated' && (Auth.I.isAdmin || Auth.I.isAccountant);
-    return SectionCard(
-      title: 'Payments and balance',
-      trailing: payStatePill(st.strOrNull('payment_status')),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        if (st.flag('legacy_paid'))
-          const NoticeBox(color: AppColors.working, icon: Icons.paid_rounded, text: 'Marked paid before payments were recorded one by one: fully paid.'),
-        Wrap(spacing: 12, runSpacing: 12, children: [
-          KpiTile(label: 'Total due', value: Fmt.money2(st.obj('totals').strOrNull('total_due'), cur), width: 200),
-          KpiTile(label: 'Paid', value: Fmt.money2(st.obj('totals').strOrNull('paid'), cur), color: AppColors.working, width: 200, icon: Icons.paid_rounded),
-          if (st.obj('totals').dbl('carried_out') > 0)
-            KpiTile(label: 'Carried to a later batch', value: Fmt.money2(st.obj('totals').strOrNull('carried_out'), cur), color: AppColors.edited, width: 220, icon: Icons.redo_rounded),
-          KpiTile(label: 'Still owed', value: Fmt.money2(st.obj('totals').strOrNull('balance'), cur), color: st.obj('totals').dbl('balance') > 0 ? AppColors.breakdown : AppColors.working,
-              width: 200, icon: Icons.account_balance_wallet_rounded),
-        ]),
-        const SizedBox(height: 12),
-        for (final v in vendors)
-          Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.line), color: Colors.white),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Row(children: [
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(v.str('vendor_name'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
-                    Text('Invoice ${v.str('invoice_no', '-')}  ·  ${Fmt.money2(v.strOrNull('invoice_amount'), cur)}'
-                        '${v.dbl('carried_in') > 0 ? '  +  previous balances ${Fmt.money2(v.strOrNull('carried_in'), cur)}' : ''}',
-                        style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
-                  ]),
-                ),
-                payStatePill(v.strOrNull('payment_status')),
-              ]),
-              const SizedBox(height: 8),
-              Wrap(spacing: 16, runSpacing: 4, children: [
-                kv('Due', Fmt.money2(v.strOrNull('total_due'), cur)),
-                kv('Paid', Fmt.money2(v.strOrNull('paid'), cur)),
-                if (v.dbl('carried_out') > 0) kv('Carried forward', Fmt.money2(v.strOrNull('carried_out'), cur)),
-                kv('Still owed', Fmt.money2(v.strOrNull('balance'), cur)),
-              ]),
-              for (final c in v.list('carried_in_detail'))
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text('From ${_carrySource(c)}'
-                      '${c.strOrNull('invoice_no') == null ? '' : ' ${c.str('invoice_no')}'}: ${Fmt.money2(c.strOrNull('amount'), cur)}',
-                      style: const TextStyle(fontSize: 12.5, color: AppColors.edited)),
-                ),
-              for (final c in v.list('carried_out_detail'))
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text('Carried to batch #${c.str('to_batch_id')} (${c.str('to_state')}): ${Fmt.money2(c.strOrNull('amount'), cur)} - pay it there.',
-                      style: const TextStyle(fontSize: 12.5, color: AppColors.edited)),
-                ),
-              if (v.list('payments').isNotEmpty) ...[
-                const Divider(height: 18),
-                for (final p in v.list('payments'))
-                  Row(children: [
-                    Icon(p.str('status') == 'Reversed' ? Icons.undo_rounded : Icons.receipt_rounded, size: 18,
-                        color: p.str('status') == 'Reversed' ? AppColors.neutral : AppColors.working),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '${p.str('voucher_no')}  ·  ${Fmt.date(p.str('paid_on'))}  ·  ${_payMethods[p.str('method')] ?? p.str('method')}'
-                        '${p.strOrNull('reference') == null ? '' : ' ${p.str('reference')}'}'
-                        '${p.str('source') == 'MarkPaid' ? '  ·  Mark paid' : ''}${p.str('status') == 'Reversed' ? '  ·  REVERSED: ${p.str('reverse_reason')}' : ''}',
-                        style: TextStyle(fontSize: 13, color: p.str('status') == 'Reversed' ? AppColors.muted : AppColors.ink,
-                            decoration: p.str('status') == 'Reversed' ? TextDecoration.lineThrough : null),
-                      ),
-                    ),
-                    Text(Fmt.money2(p.strOrNull('amount'), cur), style: const TextStyle(fontWeight: FontWeight.w700)),
-                    IconButton(tooltip: 'Payment voucher', onPressed: () => _voucherPdf(p), icon: const Icon(Icons.picture_as_pdf_rounded, size: 18)),
-                    if (p.str('status') == 'Active' && (Auth.I.isAdmin || Auth.I.isAccountant))
-                      IconButton(tooltip: 'Reverse', onPressed: _busy ? null : () => _reversePayment(p), icon: const Icon(Icons.undo_rounded, size: 18, color: AppColors.breakdown)),
-                  ]),
-              ],
-              const SizedBox(height: 6),
-              Wrap(spacing: 8, runSpacing: 8, children: [
-                if (canPay && v.dbl('balance') > 0)
-                  FilledButton.icon(onPressed: _busy ? null : () => _recordPayment(v), icon: const Icon(Icons.payments_rounded), label: const Text('Record payment')),
-                OutlinedButton.icon(onPressed: () => _statementPdf(v), icon: const Icon(Icons.description_rounded), label: const Text('Statement of account')),
-              ]),
-            ]),
-          ),
-      ]),
-    );
-  }
-
-  Future<void> _undoPaid() async {
-    final reason = await promptText(context, 'Undo "Mark paid" of batch #${widget.id}?',
-        label: 'Why? (kept in the history)',
-        minLength: 5,
-        confirm: 'Undo',
-        help: 'Only for a batch marked paid by mistake. It goes back to Finalized and waiting for payment; nothing else changes.');
-    if (reason == null) return;
-    _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/undo-paid', {'reason': reason}), 'Payment mark removed.');
-  }
-
-  Future<void> _paymentReference() async {
-    final cur = _b?.strOrNull('payment_reference');
-    final ref = await promptText(context, cur == null ? 'Record the payment reference' : 'Change the payment reference',
-        label: 'Bank transfer / cheque no.', initial: cur, maxLines: 1, help: 'Once recorded, "Mark paid" can no longer be undone.');
-    if (ref == null || ref == cur) return;
-    String? reason;
-    if (cur != null) {
-      if (!mounted) return;
-      reason = await promptText(context, 'Why does the reference change?', label: 'Reason', minLength: 5);
-      if (reason == null) return;
-    }
-    _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/payment-reference', {'payment_reference': ref, if (reason != null) 'reason': reason}),
-        'Payment reference saved.');
-  }
-
-  /// Official correction of money on an item of a FINALIZED batch that is not an attendance row:
-  /// a fuel issue (litres / price), the rate card price, or another amount. An Admin's correction applies at once;
-  /// an Accountant's is sent to an Admin for approval.
-  Future<void> _financialCorrection(Json item) async {
-    final fuel = item.list('lines').where((l) => l.str('line_type') == 'Fuel' && l.intOrNull('source_id') != null).toList();
-    final what = await pickFromList(context, 'What was wrong on ${item.machineName}?', [
-      for (final l in fuel)
-        PickOption(l, 'Fuel issue #${l.str('source_id')}', '${Fmt.num2(l.dblOrNull('quantity'))} L x ${(l.dblOrNull('unit_price') ?? 0).toStringAsFixed(3)}'),
-      if (item.intOrNull('rate_card_id') != null) PickOption('rate_card', 'Price of the rate card', 'agreed price / discount not applied'),
-      PickOption('other', 'Another amount', 'anything else that was paid wrong'),
-    ]);
-    if (what == null || !mounted) return;
-    final body = <String, dynamic>{'eq_item_id': item.intv('eq_item_id')};
-    if (what.value is Map) {
-      final l = asJson(what.value);
-      final liters = await promptText(context, 'Correct litres', label: 'Litres (from the receipt)', initial: l.dblOrNull('quantity')?.toString() ?? '', maxLines: 1);
-      if (liters == null || !mounted) return;
-      final n = num.tryParse(liters.replaceAll(',', '.'));
-      if (n == null || n <= 0) {
-        showError(context, ApiException(null, 'VALIDATION', 'Type the number of litres.'));
-        return;
-      }
-      body.addAll({'target_type': 'fuel_issue', 'target_id': l.intv('source_id'), 'fuel_changes': {'liters': n}});
-    } else {
-      final amount = await promptText(context, 'Amount of the correction',
-          label: 'Amount (+ the vendor gets more, - the vendor gets less)', maxLines: 1, help: 'Settled by a debit (+) or credit (-) note in the first open period.');
-      if (amount == null || !mounted) return;
-      final n = num.tryParse(amount.replaceAll(',', '.'));
-      if (n == null || n == 0) {
-        showError(context, ApiException(null, 'VALIDATION', 'Type a non-zero amount.'));
-        return;
-      }
-      body.addAll({'target_type': what.value == 'rate_card' ? 'rate_card' : 'other', if (what.value == 'rate_card') 'target_id': item.intv('rate_card_id'), 'amount': n});
-    }
-    if (!mounted) return;
-    final admin = Auth.I.isAdmin;
-    final reason = await promptText(context, 'Reason of the correction',
-        label: 'Reason (printed on the debit / credit note)', minLength: 5, confirm: admin ? 'Apply correction' : 'Send to the Admin');
-    if (reason == null) return;
-    body['reason'] = reason;
-    _act(() => Api.I.post('/equipment/admin/corrections/financial', body),
-        admin ? 'Correction applied: the debit / credit note was issued.' : 'Sent to the Admin for approval (Fuel & adjustments -> Corrections).');
-  }
-
-  /// An Accountant asking to undo a FINALIZED batch: the Admin must approve (when only the Admin closes payroll).
-  bool get _needsApproval => Auth.I.isAccountant && (_b?.flag('is_finalized') ?? false);
-
-  Future<void> _void() async {
-    final ask = _needsApproval;
-    final fin = _b?.flag('is_finalized') ?? false;
-    final reason = await promptText(context, ask ? 'Ask the Admin to void batch #${widget.id}' : 'Void batch #${widget.id}',
-        label: fin ? 'Reason' : 'Reason (optional)', required: fin, minLength: fin ? 3 : 0, confirm: ask ? 'Send request' : 'Void',
-        help: fin ? null : 'The draft is voided and its rows can be paid again.');
-    if (reason == null) return;
+  /// Draft: a new calculation with the current data.
+  Future<void> _recalculate() async {
+    Future<dynamic> run(bool accept, String? reason) => Api.I.post('/equipment/payroll/batches/$_id/supersede', {'accept_blockers': accept, if (reason != null) 'reason': reason});
     setState(() => _busy = true);
     try {
-      final r = asJson(await Api.I.patch('/equipment/payroll/batches/${widget.id}/void', {if (reason.trim().isNotEmpty) 'reason': reason.trim()}));
-      if (!mounted) return;
-      showSnack(context, r.obj('pending_request').isNotEmpty ? 'Request sent. The Admin must approve it before the batch is voided.' : 'Batch voided. Its rows can be paid again.');
+      final r = asJson(await run(false, null));
+      _id = r.intv('eq_batch_id', _id);
+      if (mounted) showSnack(context, 'Draft recalculated.');
       await _load();
-    } catch (e) {
-      if (mounted) showError(context, e);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _decide(Json rq, bool approve) async {
-    final what = switch (rq.str('action')) {
-      'void' => 'void this batch',
-      'unfinalize' => 'undo the Finalize (back to a draft, same invoice numbers)',
-      _ => 'create a new version',
-    };
-    final note = await promptText(context, approve ? 'Approve: $what?' : 'Reject the request?',
-        label: approve ? 'Note (optional)' : 'Why (the accountant sees it)', required: !approve, confirm: approve ? 'Approve' : 'Reject');
-    if (note == null) return;
-    setState(() => _busy = true);
-    try {
-      final r = asJson(await Api.I.patch('/equipment/payroll/requests/${rq.str('request_id')}/${approve ? 'approve' : 'reject'}', {'note': note}));
-      if (!mounted) return;
-      showSnack(context, approve ? 'Request approved.' : 'Request rejected.');
-      if (approve && r.intv('eq_batch_id') != widget.id) {
-        Navigator.pushReplacement(context, MaterialPageRoute<void>(builder: (_) => BatchScreen(id: r.intv('eq_batch_id'))));
-        return;
-      }
-      await _load();
-    } catch (e) {
-      if (mounted) showError(context, e);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  /// Draft: "Recalculate" (new version with the current data, no reason needed). Finalized, within the undo window:
-  /// undo + recalculate in one step (reason required); the invoice numbers are kept for the new version.
-  Future<void> _supersede() async {
-    final ask = _needsApproval;
-    final fin = _b?.flag('is_finalized') ?? false;
-    String reason = '';
-    if (fin) {
-      final r = await promptText(context, ask ? 'Ask the Admin for a new version of batch #${widget.id}' : 'New version of batch #${widget.id}',
-          label: 'Why a new version?', minLength: 3, confirm: ask ? 'Send request' : 'Create version',
-          help: 'The batch goes back to a draft as a new version; its invoice numbers are kept and given back when it is finalized again.');
-      if (r == null) return;
-      reason = r.trim();
-    }
-    Future<dynamic> run(bool accept) => Api.I.post('/equipment/payroll/batches/${widget.id}/supersede', {if (reason.isNotEmpty) 'reason': reason, 'accept_blockers': accept});
-    setState(() => _busy = true);
-    try {
-      final r = asJson(await run(false));
-      if (!mounted) return;
-      if (r.intv('eq_batch_id') == widget.id) {
-        showSnack(context, 'Request sent. The Admin must approve it before the new version is made.');
-        setState(() => _busy = false);
-        await _load();
-        return;
-      }
-      Navigator.pushReplacement(context, MaterialPageRoute<void>(builder: (_) => BatchScreen(id: r.intv('eq_batch_id'))));
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
       if (e.code == 'BLOCKERS_PRESENT') {
-        final ok = await confirmDialog(context, 'Open problems',
-            '${e.message}\n\nCreate the new version anyway (rows with problems are left out)?'
-            '${reason.isEmpty ? '' : ' Your reason "$reason" is kept as the reason for accepting them.'}',
-            confirm: 'Continue', danger: true);
-        if (!ok) return;
-        if (reason.isEmpty) {
-          if (!mounted) return;
-          final why = await askAcceptReason(context);
-          if (why == null) return;
-          reason = why;
-        }
-        await _act(() => run(true), 'New version created.', reloadOther: true);
+        final why = await askAcceptReason(context);
+        if (why == null) return;
+        await _act(() => run(true, why), 'Draft recalculated.');
+      } else if (e.code == 'PERIOD_OVERLAP') {
+        await showOverlapDialog(context, e.details == null ? <Json>[] : e.details!.list('overlaps'));
       } else {
+        showError(context, e);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _deleteDraft() async {
+    final ok = await confirmDialog(context, 'Delete this draft?', 'It has no number. Its period becomes free for another invoice.', confirm: 'Delete', danger: true);
+    if (!ok) return;
+    setState(() => _busy = true);
+    try {
+      await Api.I.patch('/equipment/payroll/batches/$_id/void', {});
+      if (!mounted) return;
+      showSnack(context, 'Draft deleted.');
+      Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
         showError(context, e);
       }
     }
   }
 
-  /// Undo the Finalize (within the window): back to a draft with the same invoice numbers. Accountant: request to the Admin.
-  Future<void> _unfinalize() async {
-    final admin = Auth.I.isAdmin;
-    final reason = await promptText(context, admin ? 'Undo the Finalize of batch #${widget.id}?' : 'Ask the Admin to undo the Finalize of batch #${widget.id}',
-        label: 'Why? (kept in the history)',
-        minLength: 3,
-        confirm: admin ? 'Undo Finalize' : 'Send to the Admin',
-        help: 'The batch goes back to a draft; its invoice numbers stay reserved and come back when it is finalized again. '
-            'Its days can be edited again; then use "Recalculate".');
+  // ------------------------------------------------------------- issued / handed over / withdrawn
+  Future<void> _cancel() async {
+    final reason = await promptText(context, 'Cancel invoice $_no?',
+        label: 'Why? (kept in the history)', minLength: 3, confirm: 'Cancel invoice',
+        help: 'Its numbers stay cancelled and are never used again. Its days become free for a new invoice.');
     if (reason == null) return;
+    _act(() => Api.I.patch('/equipment/payroll/batches/$_id/void', {'reason': reason}), 'Invoice cancelled.');
+  }
+
+  Future<void> _handOver() async {
+    await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => HandoverScreen(batchIds: {_id})));
+    await _load();
+  }
+
+  Future<void> _withdraw() async {
+    final body = await withdrawDialog(context, title: 'Withdraw $_no from finance', currency: _b?.str('currency'));
+    if (body == null) return;
     setState(() => _busy = true);
     try {
-      final r = await Api.I.request('PATCH', '/equipment/payroll/batches/${widget.id}/unfinalize', body: {'reason': reason});
-      if (!mounted) return;
-      showSnack(context, asJson(r['data']).obj('pending_request').isNotEmpty ? 'Sent to the Admin for approval.' : 'Finalize undone: the batch is a draft again (numbers kept).');
+      final r = await Api.I.request('POST', '/equipment/payroll/batches/$_id/withdraw', body: body);
       await _load();
+      if (!mounted) return;
+      showSnack(context, 'Withdrawn from finance. Print the acknowledgement for signature.');
+      final wid = asJson(r).intOrNull('withdrawal_id');
+      if (wid != null) openWithdrawalPdf(context, wid, _b?.obj('withdrawal').str('withdrawal_no', 'withdrawal') ?? 'withdrawal');
     } catch (e) {
       if (mounted) showError(context, e);
     } finally {
@@ -1739,54 +1708,63 @@ class _BatchScreenState extends State<BatchScreen> {
     }
   }
 
-  static const _undoWhy = {
-    'paid': 'The batch is paid: undo "Mark paid" first.',
-    'payments': 'A payment is recorded: reverse it first.',
-    'corrections': 'An official correction is based on this batch.',
-    'carried_out': 'Its balance was carried into a later batch.',
-    'window_passed': 'The time to undo has passed: use an official Correction.',
-    'not_finalized': 'Not finalized.',
-  };
-
-  Widget _undoChip(Json b) {
-    final u = b.obj('finalize_undo');
-    if (u.flag('possible')) {
-      final left = u.intv('minutes_left');
-      return ActionChip(
-        avatar: const Icon(Icons.lock_open_rounded, size: 18, color: AppColors.info),
-        label: Text('Undo Finalize: ${left ~/ 60} h ${left % 60} min left'),
-        onPressed: _busy || b.obj('pending_request').isNotEmpty ? null : _unfinalize,
-      );
-    }
-    return Tooltip(
-      message: _undoWhy[u.str('reason')] ?? 'The Finalize cannot be undone.',
-      child: const Chip(
-        avatar: Icon(Icons.lock_rounded, size: 18, color: AppColors.neutral),
-        label: Text('Undo Finalize: not possible', style: TextStyle(color: AppColors.muted)),
-      ),
-    );
-  }
-
-  Future<void> _versions() async {
+  Future<void> _reissue() async {
+    final reason = await promptText(context, 'Re-issue $_no with a new number?',
+        label: 'Why? (kept in the history, not printed)', minLength: 3, confirm: 'Re-issue',
+        help: 'The invoice is recalculated with the current data and gets NEW numbers. The old numbers stay cancelled. '
+            'Nothing on the new invoice mentions the old one; the link is shown here only.');
+    if (reason == null) return;
+    setState(() => _busy = true);
     try {
-      final rows = await Api.I.getList('/equipment/payroll/batches/${widget.id}/versions');
+      final b = asJson(await Api.I.post('/equipment/payroll/batches/$_id/reissue', {'reason': reason}));
+      _id = b.intv('eq_batch_id', _id);
+      await _load();
+      if (mounted) showSnack(context, 'Re-issued: $_no');
+    } on ApiException catch (e) {
       if (!mounted) return;
-      final cur = _b!.str('currency');
-      final p = await pickFromList(context, 'Versions', [
-        for (final v in rows)
-          PickOption(v.intv('eq_batch_id'), 'v${v.str('version_number')}  ·  #${v.str('eq_batch_id')}  ·  ${_batchLabel(v.str('status'), v.flag('is_finalized'))}',
-              '${Fmt.money2(v.strOrNull('total_net'), cur)}  ·  ${Fmt.date(v.str('generated_at'))}${v.strOrNull('supersede_reason') == null ? '' : '  ·  ${v.str('supersede_reason')}'}'),
-      ]);
-      if (p != null && p.value != widget.id && mounted) {
-        Navigator.pushReplacement(context, MaterialPageRoute<void>(builder: (_) => BatchScreen(id: p.value as int)));
-      }
+      if (e.code == 'ROWS_NOT_APPROVED') setState(() => _blockers = e.details?.list('blockers'));
+      showError(context, e);
     } catch (e) {
       if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  /// Vendor and machine invoices go to the vendor: the office first chooses what is printed (explanations, internal
-  /// details); the money lines and totals always stay. Summary and fuel statements print in full.
+  // ------------------------------------------------------------- notes
+  Future<void> _newNote({Json? item}) async {
+    final b = _b!;
+    final vendors = <int, String>{for (final i in b.list('items')) i.intv('vendor_id'): i.str('vendor_name')};
+    int? vendorId = item?.intv('vendor_id');
+    String? vendorName = item?.str('vendor_name');
+    if (vendorId == null) {
+      if (vendors.length == 1) {
+        vendorId = vendors.keys.first;
+        vendorName = vendors.values.first;
+      } else {
+        final p = await pickFromList(context, 'Note for which vendor?', [for (final e in vendors.entries) PickOption(e.key, e.value)]);
+        if (p == null) return;
+        vendorId = p.value as int;
+        vendorName = p.label;
+      }
+    }
+    if (!mounted) return;
+    final n = await editNote(context,
+        vendorId: vendorId,
+        vendorName: vendorName,
+        refBatchId: _id,
+        refLabel: b.list('invoices').where((x) => x.str('kind') == 'Vendor' && x.intv('vendor_id') == vendorId).map((x) => x.str('invoice_no')).firstOrNull ?? _no,
+        currency: b.str('currency'),
+        equipmentId: item?.intv('equipment_id'),
+        equipmentLabel: item == null ? null : item.machineName);
+    if (n == null || !mounted) return;
+    await _openNote(context, n.intv('note_id'));
+    _load();
+  }
+
+  // ------------------------------------------------------------- documents
+  /// Vendor and machine invoices go to the vendor: the office chooses what is printed (explanations, internal details);
+  /// the money lines and totals always stay.
   Future<void> _pdf(String view, {int? vendorId, int? equipmentId, String suffix = ''}) async {
     Set<String> hide = {};
     if (view == 'vendor' || view == 'machine') {
@@ -1794,77 +1772,78 @@ class _BatchScreenState extends State<BatchScreen> {
       if (r == null || !mounted) return;
       hide = r;
     }
-    PdfViewScreen.open(context,
-        title: 'Batch #${widget.id} ${view == 'summary' ? 'summary' : suffix}',
-        fileName: 'invoice-${widget.id}-$view${suffix.isEmpty ? '' : '-$suffix'}.pdf',
-        load: () => Api.I.getBytes('/equipment/payroll/batches/${widget.id}/export.pdf',
+    final id = _id;
+    await PdfViewScreen.open(context,
+        title: view == 'summary' ? 'Summary $_no' : suffix,
+        fileName: '${suffix.isEmpty ? 'invoice-$id-$view' : suffix}.pdf',
+        load: () => Api.I.getBytes('/equipment/payroll/batches/$id/export.pdf',
             query: {'view': view, 'vendor_id': vendorId, 'equipment_id': equipmentId, if (hide.isNotEmpty) 'hide': (hide.toList()..sort()).join(',')}));
   }
 
-  /// Admin, draft only: extra hours of a monthly machine cover its missing hours (or not). The draft becomes a new version.
-  Future<void> _setOffset(String key, bool on) async {
-    final now = _offsetKeysOf(_b!);
-    on ? now.add(key) : now.remove(key);
-    await _act(() => Api.I.patch('/equipment/payroll/batches/${widget.id}/offsets', {'offsets': now.toList()..sort()}),
-        on ? 'Extra hours now cover the missing hours (new version).' : 'Extra hours no longer cover the missing hours (new version).',
-        reloadOther: true);
-  }
-
-  Future<void> _vendorPdf() async {
+  Future<(int, String)?> _pickVendor(String title) async {
     final items = _b!.list('items');
     final vendors = <int, String>{for (final i in items) i.intv('vendor_id'): i.str('vendor_name')};
-    if (vendors.length == 1) {
-      _pdf('vendor', vendorId: vendors.keys.first, suffix: vendors.values.first);
-      return;
-    }
-    final p = await pickFromList(context, 'Vendor statement', [for (final e in vendors.entries) PickOption(e.key, e.value)]);
-    if (p != null) _pdf('vendor', vendorId: p.value as int, suffix: p.label);
+    if (vendors.isEmpty) return null;
+    if (vendors.length == 1) return (vendors.keys.first, vendors.values.first);
+    final p = await pickFromList(context, title, [for (final e in vendors.entries) PickOption(e.key, e.value)]);
+    return p == null ? null : (p.value as int, p.label);
   }
 
-  Future<void> _excel() async {
+  String _vendorNo(int vendorId) =>
+      _b!.list('invoices').where((x) => x.str('kind') == 'Vendor' && x.intv('vendor_id') == vendorId && !x.flag('cancelled') && x.str('status') == 'Issued').map((x) => x.str('invoice_no')).firstOrNull ??
+      'draft-$_id';
+
+  Future<void> _vendorPdf() async {
+    final v = await _pickVendor('Vendor invoice');
+    if (v != null) _pdf('vendor', vendorId: v.$1, suffix: _vendorNo(v.$1));
+  }
+
+  Future<void> _download(String path, String fileName, {Map<String, dynamic>? query}) async {
     try {
-      final bytes = await Api.I.getBytes('/equipment/payroll/batches/${widget.id}/export.xlsx');
-      final msg = await FileSave.save(bytes, 'equipment-invoices-${widget.id}-v${_b!.str('version_number')}.xlsx');
+      final bytes = await Api.I.getBytes(path, query: query);
+      final msg = await FileSave.save(bytes, fileName);
       if (mounted) showSnack(context, msg);
     } catch (e) {
       if (mounted) showError(context, e);
     }
   }
 
-  Future<void> _rows(Json item) async {
-    final draft = _b?.str('status') == 'Generated' && !(_b?.flag('is_finalized') ?? true);
+  /// The vendor invoice as an Excel payment certificate (the company's format, with the logo): one sheet per machine.
+  Future<void> _certificate({int? vendorId, int? equipmentId, String? code}) async {
+    var vid = vendorId;
+    if (vid == null) {
+      final v = await _pickVendor('Excel certificate for which vendor?');
+      if (v == null) return;
+      vid = v.$1;
+    }
+    await _download('/equipment/payroll/batches/$_id/certificate.xlsx', '${_vendorNo(vid)}${code == null ? '' : '-$code'}.xlsx',
+        query: {'vendor_id': vid, if (equipmentId != null) 'equipment_id': equipmentId});
+  }
+
+  /// Admin: extra hours of a monthly machine cover its missing hours (or not). Draft: recalculated; issued: brought
+  /// up to date with the same numbers.
+  Future<void> _setOffset(String key, bool on) async {
+    final now = _offsetKeysOf(_b!);
+    on ? now.add(key) : now.remove(key);
+    await _act(() => Api.I.patch('/equipment/payroll/batches/$_id/offsets', {'offsets': now.toList()..sort()}),
+        on ? 'Extra hours now cover the missing hours.' : 'Extra hours no longer cover the missing hours.');
+  }
+
+  Future<void> _rows(Json item, bool editable) async {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => _SnapshotSheet(batchId: widget.id, item: item, editable: draft && (Auth.I.isAdmin || Auth.I.isAccountant)),
+      builder: (_) => _SnapshotSheet(batchId: _id, item: item, editable: editable),
     );
-    if (draft) await _load(); // an edit made from the sheet makes the draft stale
+    if (editable) await _load(); // a change is brought into the invoice (draft: shown as "recalculate")
   }
 
   @override
   Widget build(BuildContext context) {
     final b = _b;
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Invoice batch #${widget.id}'),
-        actions: [
-          if (b != null) ...[
-            IconButton(tooltip: 'Versions', onPressed: _versions, icon: const Icon(Icons.history_rounded)),
-            IconButton(tooltip: 'Excel', onPressed: _excel, icon: const Icon(Icons.grid_on_rounded)),
-            PopupMenuButton<String>(
-              tooltip: 'PDF',
-              icon: const Icon(Icons.picture_as_pdf_rounded),
-              onSelected: (v) => v == 'summary' ? _pdf('summary') : _vendorPdf(),
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'summary', child: Text('Summary PDF')),
-                PopupMenuItem(value: 'vendor', child: Text('Vendor invoice PDF')),
-              ],
-            ),
-            const SizedBox(width: 8),
-          ],
-        ],
-      ),
+      appBar: AppBar(title: Text(b == null ? 'Invoice' : (b.str('state') == 'draft' ? 'Draft invoice #$_id' : 'Invoice $_no'))),
       body: _error != null
           ? ErrorView(error: _error!, onRetry: _load)
           : b == null
@@ -1873,106 +1852,137 @@ class _BatchScreenState extends State<BatchScreen> {
     );
   }
 
+  Widget _stateNotice(Json b) {
+    final st = b.str('state');
+    final ho = b.obj('handover');
+    final wd = b.obj('withdrawal');
+    switch (st) {
+      case 'draft':
+        return const NoticeBox(
+          color: AppColors.standby,
+          icon: Icons.edit_note_rounded,
+          title: 'Draft: no number yet',
+          text: 'It reserves this period for its machines. Issue it once the period has ended and every row is approved.',
+        );
+      case 'issued':
+        return const NoticeBox(
+          color: AppColors.info,
+          icon: Icons.receipt_long_rounded,
+          title: 'Issued, still in the office',
+          text: 'A change to its days is brought into it automatically, with the same number. Hand it over to finance when it is ready.',
+        );
+      case 'handed_over':
+        return NoticeBox(
+          color: AppColors.working,
+          icon: Icons.lock_rounded,
+          title: 'Handed over to finance${ho.isEmpty ? '' : ': ${ho.str('handover_no')} on ${Fmt.date(ho.str('handed_on'))}, received by ${ho.str('receiver_name')}'}',
+          text: 'Locked for everybody. To change it, the Admin withdraws it from finance (signed acknowledgement), or makes a debit / credit note.',
+          action: ho.isEmpty
+              ? null
+              : TextButton(onPressed: () => openHandoverPdf(context, ho.intv('handover_id'), ho.str('handover_no')), child: const Text('Sheet')),
+        );
+      case 'returned':
+        return NoticeBox(
+          color: AppColors.edited,
+          icon: Icons.undo_rounded,
+          title: 'Withdrawn from finance${wd.isEmpty ? '' : ': ${wd.str('withdrawal_no')} on ${Fmt.date(wd.str('withdrawn_on'))}'}',
+          text: [
+            if (wd.isNotEmpty) 'Given back by ${wd.str('finance_person')}: ${wd.str('reason')}',
+            if (wd.isNotEmpty) wd.flag('was_paid') ? 'Finance had paid it${wd.strOrNull('paid_amount') == null ? '' : ' (${Fmt.money2(wd.strOrNull('paid_amount'), b.str('currency'))})'}.' : 'It was not paid.',
+            b.flag('stale')
+                ? 'It changed since: re-issue it with a new number.'
+                : 'The Admin can change its days, then re-issue it with a new number, cancel it, or hand it over again unchanged.',
+          ].join('\n'),
+          action: wd.isEmpty
+              ? null
+              : TextButton(onPressed: () => openWithdrawalPdf(context, wd.intv('withdrawal_id'), wd.str('withdrawal_no')), child: const Text('Acknowledgement')),
+        );
+      case 'cancelled':
+        return NoticeBox(
+          color: AppColors.breakdown,
+          icon: Icons.block_rounded,
+          title: 'Cancelled',
+          text: '${b.strOrNull('void_reason') ?? 'Draft deleted.'} Its numbers are never used again.',
+        );
+      case 'replaced':
+        final r = b.obj('replaced_by');
+        return NoticeBox(
+          color: AppColors.neutral,
+          icon: Icons.history_rounded,
+          title: 'Re-issued with a new number${r.strOrNull('invoice_no') == null ? '' : ': ${r.str('invoice_no')}'}',
+          text: 'This number is cancelled and never used again.',
+          action: r.isEmpty ? null : TextButton(onPressed: () => _openInvoice(context, r.intv('eq_batch_id')), child: const Text('Open')),
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
   Widget _body(Json b) {
     final cur = b.str('currency');
-    final status = b.str('status');
-    final fin = b.flag('is_finalized');
-    // who closes payroll follows the setting payroll_finalize_admin_only (Admin only, or Admin and Accountant)
-    final mayClose = Auth.I.isAdmin || (Auth.I.isAccountant && !b.flag('finalize_admin_only'));
-    final canFinalize = status == 'Generated' && !fin && mayClose;
-    final canPay = status == 'Generated' && fin && mayClose && b.obj('settlement').obj('totals').dbl('balance') > 0;
-    final undo = b.obj('paid_undo');
+    final st = b.str('state');
+    final a = b.obj('actions');
+    final draft = st == 'draft';
     final hasFuelDiff = b.list('items').any((i) => (i.dblOrNull('fuel_difference') ?? 0) != 0);
-    final vendorInvoices = b.list('invoices').where((i) => i.str('kind') == 'Vendor' && !i.flag('cancelled') && i.str('status') != 'Withdrawn').toList();
-    final cancelledInvoices = b.list('invoices').where((i) => i.flag('cancelled')).toList();
-    final reserved = b.list('reserved_numbers');
-    final canVoid = status == 'Generated';
-    final draft = status == 'Generated' && !fin;
-    final office = Auth.I.isAdmin || Auth.I.isAccountant;
-    // a paid batch is never recalculated: differences go through an official correction. A finalized one only while
-    // its Finalize can still be undone (eq_finalize_undo_hours).
-    final canSupersede = fin && status == 'Generated' && b.obj('finalize_undo').flag('possible');
-    final staleCount = b.list('stale_reasons').length;
+    final vendorInvoices = b.list('invoices').where((i) => i.str('kind') == 'Vendor' && !i.flag('cancelled') && i.str('status') == 'Issued').toList();
+    final cancelled = b.list('invoices').where((i) => i.flag('cancelled')).toList();
+    final replaces = b.obj('replaces');
+    // days editable from the invoice: office on a draft or an issued invoice; Admin on one withdrawn from finance
+    final rowsEditable = (_office && (st == 'draft' || st == 'issued')) || (Auth.I.isAdmin && st == 'returned');
+    final offsetsEditable = Auth.I.isAdmin && (st == 'draft' || st == 'issued') && !_busy;
+    final notes = b.list('notes');
     return PageBody(onRefresh: _load, maxWidth: 1200, children: [
       const SizedBox(height: 16),
       Card(
         child: Padding(
           padding: const EdgeInsets.all(18),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('${Fmt.date(b.str('start_date'))}  to  ${Fmt.date(b.str('end_date'))}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 4),
-                  Text('${_scopeText(b)}  ·  version ${b.str('version_number')}  ·  $cur', style: const TextStyle(color: AppColors.muted)),
+                  Text(draft ? 'Draft #$_id' : _no, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.navy)),
+                  const SizedBox(height: 2),
+                  Text('${Fmt.date(b.str('start_date'))}  to  ${Fmt.date(b.str('end_date'))}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  Text('${_scopeText(b)}  ·  $cur', style: const TextStyle(color: AppColors.muted)),
                 ]),
               ),
-              Pill(_batchLabel(status, fin, b.obj('settlement').strOrNull('payment_status')), color: _batchColor(status, fin, b.obj('settlement').strOrNull('payment_status'))),
+              invoiceStatePill(st),
             ]),
-            if (draft && reserved.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: NoticeBox(
-                  color: AppColors.info,
-                  icon: Icons.bookmark_rounded,
-                  title: 'Draft (was finalized; invoice numbers reserved)',
-                  text: '${reserved.map((x) => x.str('invoice_no')).join(', ')}. They come back when this batch is finalized again.',
-                ),
+            const SizedBox(height: 12),
+            _stateNotice(b),
+            if (replaces.isNotEmpty)
+              NoticeBox(
+                color: AppColors.neutral,
+                icon: Icons.link_rounded,
+                text: 'Re-issue of ${replaces.str('invoice_no', '#${replaces.str('eq_batch_id')}')} (withdrawn from finance). Shown here only, never printed.',
+                action: TextButton(onPressed: () => _openInvoice(context, replaces.intv('eq_batch_id')), child: const Text('Open')),
               ),
-            if (b.flag('stale'))
-              Container(
-                margin: const EdgeInsets.only(top: 12),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: AppColors.standby.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
-                child: Row(children: [
-                  const Icon(Icons.warning_amber_rounded, color: AppColors.standby),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text('$staleCount change(s) since this draft was calculated. Recalculate it before finalizing.')),
-                ]),
+            if (draft && b.flag('stale'))
+              NoticeBox(
+                color: AppColors.standby,
+                icon: Icons.warning_amber_rounded,
+                title: '${b.list('stale_reasons').length} change(s) since this draft was calculated',
+                text: '${b.list('stale_reasons').take(6).map(_staleReason).join('\n')}\nRecalculate it before issuing.',
               ),
-            if (b.flag('stale'))
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(b.list('stale_reasons').take(6).map(_staleReason).join('\n'), style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+            if (_refreshError != null && st == 'issued')
+              NoticeBox(
+                color: AppColors.breakdown,
+                icon: Icons.sync_problem_rounded,
+                title: 'This invoice could not be brought up to date',
+                text: _refreshError!.message,
               ),
-            if (cancelledInvoices.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Text('Cancelled numbers (kept, never reused): ${cancelledInvoices.map((i) => i.str('invoice_no')).join(', ')}',
-                    style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
-              ),
-            if (b.obj('pending_request').isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(top: 10),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: AppColors.standby.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.standby.withValues(alpha: 0.35))),
-                child: Row(children: [
-                  const Icon(Icons.hourglass_top_rounded, color: AppColors.standby),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                        '${b.obj('pending_request').str('requested_by')} asks to ${switch (b.obj('pending_request').str('action')) { 'void' => 'VOID this batch', 'unfinalize' => 'UNDO THE FINALIZE', _ => 'make a NEW VERSION' }}: ${b.obj('pending_request').str('reason')}'
-                        '${Auth.I.isAdmin ? '' : '\nWaiting for the Admin.'}'),
-                  ),
-                  if (Auth.I.isAdmin) ...[
-                    TextButton(onPressed: _busy ? null : () => _decide(b.obj('pending_request'), false), child: const Text('Reject')),
-                    FilledButton(onPressed: _busy ? null : () => _decide(b.obj('pending_request'), true), child: const Text('Approve')),
-                  ],
-                ]),
-              ),
-            if (b.strOrNull('void_reason') != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('Void reason: ${b.str('void_reason')}', style: const TextStyle(color: AppColors.breakdown))),
-            if (b.strOrNull('supersede_reason') != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('Version reason: ${b.str('supersede_reason')}', style: const TextStyle(color: AppColors.muted))),
-            const SizedBox(height: 14),
+            if (b.strOrNull('accept_blockers_reason') != null)
+              NoticeBox(color: AppColors.standby, icon: Icons.rule_rounded, title: 'Created with open problems', text: b.str('accept_blockers_reason')),
             Wrap(spacing: 12, runSpacing: 12, children: [
               KpiTile(label: 'Machines', value: b.str('total_equipment'), icon: Icons.precision_manufacturing_rounded),
               KpiTile(label: 'Gross', value: Fmt.money2(b.strOrNull('total_gross'), cur), width: 200),
               KpiTile(label: 'Deductions', value: Fmt.money2(b.strOrNull('total_deductions'), cur), color: AppColors.breakdown, width: 200),
-              KpiTile(label: 'Net to pay', value: Fmt.money2(b.strOrNull('total_net'), cur), color: AppColors.navy, width: 220, icon: Icons.account_balance_wallet_rounded),
+              KpiTile(label: 'Net', value: Fmt.money2(b.strOrNull('total_net'), cur), color: AppColors.navy, width: 220, icon: Icons.account_balance_wallet_rounded),
             ]),
             const SizedBox(height: 14),
             _Timeline(b: b),
-            const SizedBox(height: 14),
-            if (vendorInvoices.isNotEmpty) ...[
+            if (vendorInvoices.length > 1) ...[
+              const SizedBox(height: 12),
               Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
                 const Text('Vendor invoices:', style: TextStyle(color: AppColors.muted)),
                 for (final v in vendorInvoices)
@@ -1982,60 +1992,110 @@ class _BatchScreenState extends State<BatchScreen> {
                     onPressed: () => _pdf('vendor', vendorId: v.intv('vendor_id'), suffix: v.str('invoice_no')),
                   ),
               ]),
-              const SizedBox(height: 12),
             ],
-            if (status == 'Generated' && !fin && !mayClose)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 10),
-                child: Text('Upload the signed monthly sheets in Paper sheets; the Admin then finalizes this batch.', style: TextStyle(color: AppColors.muted)),
+            if (cancelled.isNotEmpty && st != 'cancelled' && st != 'replaced')
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text('Cancelled numbers (never reused): ${cancelled.map((i) => i.str('invoice_no')).join(', ')}',
+                    style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
               ),
-            if (b.strOrNull('accept_blockers_reason') != null)
-              NoticeBox(
-                color: AppColors.standby,
-                icon: Icons.rule_rounded,
-                title: 'Generated with open problems',
-                text: b.str('accept_blockers_reason'),
-              ),
-            if (status == 'Paid')
-              NoticeBox(
-                color: AppColors.working,
-                icon: Icons.paid_rounded,
-                title: b.strOrNull('payment_reference') == null ? 'Paid (no payment reference yet)' : 'Paid · reference ${b.str('payment_reference')}',
-                text: undo.flag('possible')
-                    ? 'Marked paid by mistake? It can be undone for ${Fmt.duration(undo.intv('minutes_left'))} more (until a payment reference is recorded).'
-                    : 'Final. Any difference is settled with an official Correction (open the machine below).',
-              ),
+            const SizedBox(height: 14),
             Wrap(spacing: 8, runSpacing: 8, children: [
-              if (hasFuelDiff) OutlinedButton.icon(onPressed: () => _pdf('fueldiff', suffix: 'fuel-difference'), icon: const Icon(Icons.local_gas_station_rounded), label: const Text('Fuel difference statements')),
-              if (canFinalize) FilledButton.icon(onPressed: _busy || b.flag('stale') ? null : _finalize, icon: const Icon(Icons.lock_rounded), label: const Text('Finalize')),
-              if (canPay) FilledButton.icon(onPressed: _busy ? null : _markPaid, icon: const Icon(Icons.paid_rounded), label: const Text('Mark paid'), style: FilledButton.styleFrom(backgroundColor: AppColors.working)),
-              if (status == 'Paid' && mayClose && undo.flag('possible'))
-                OutlinedButton.icon(onPressed: _busy ? null : _undoPaid, icon: const Icon(Icons.undo_rounded), label: const Text('Undo mark paid')),
-              if (status == 'Paid' && mayClose)
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _paymentReference,
-                  icon: const Icon(Icons.confirmation_number_rounded),
-                  label: Text(b.strOrNull('payment_reference') == null ? 'Add payment reference' : 'Payment reference'),
-                ),
-              if (draft && office)
+              if (a.flag('issue'))
+                FilledButton.icon(onPressed: _busy || b.flag('stale') ? null : _issue, icon: const Icon(Icons.verified_rounded), label: const Text('Issue')),
+              if (a.flag('recalculate'))
                 b.flag('stale')
                     ? FilledButton.icon(
-                        onPressed: _busy ? null : _supersede,
+                        onPressed: _busy ? null : _recalculate,
                         icon: const Icon(Icons.refresh_rounded),
                         label: const Text('Recalculate'),
                         style: FilledButton.styleFrom(backgroundColor: AppColors.standby, foregroundColor: AppColors.ink),
                       )
-                    : OutlinedButton.icon(onPressed: _busy ? null : _supersede, icon: const Icon(Icons.refresh_rounded), label: const Text('Recalculate')),
-              if (fin && status == 'Generated' && office) _undoChip(b),
-              if (canSupersede) OutlinedButton.icon(onPressed: _busy || b.obj('pending_request').isNotEmpty ? null : _supersede, icon: const Icon(Icons.difference_rounded), label: Text(_needsApproval ? 'Ask for new version' : 'New version')),
-              if (canVoid) OutlinedButton.icon(onPressed: _busy || b.obj('pending_request').isNotEmpty ? null : _void, icon: const Icon(Icons.block_rounded, color: AppColors.breakdown), label: Text(_needsApproval ? 'Ask to void' : 'Void', style: const TextStyle(color: AppColors.breakdown))),
+                    : OutlinedButton.icon(onPressed: _busy ? null : _recalculate, icon: const Icon(Icons.refresh_rounded), label: const Text('Recalculate')),
+              if (a.flag('hand_over'))
+                FilledButton.icon(
+                  onPressed: _busy ? null : _handOver,
+                  icon: const Icon(Icons.outbox_rounded),
+                  label: const Text('Hand over to finance'),
+                  style: FilledButton.styleFrom(backgroundColor: AppColors.working),
+                ),
+              if (a.flag('reissue'))
+                FilledButton.icon(onPressed: _busy ? null : _reissue, icon: const Icon(Icons.autorenew_rounded), label: const Text('Re-issue (new number)')),
+              if (a.flag('withdraw'))
+                OutlinedButton.icon(onPressed: _busy ? null : _withdraw, icon: const Icon(Icons.undo_rounded), label: const Text('Withdraw from finance')),
+              if (a.flag('notes'))
+                OutlinedButton.icon(onPressed: _busy ? null : () => _newNote(), icon: const Icon(Icons.post_add_rounded), label: const Text('Debit / credit note')),
+              if (a.flag('delete_draft'))
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _deleteDraft,
+                  icon: const Icon(Icons.delete_outline_rounded, color: AppColors.breakdown),
+                  label: const Text('Delete draft', style: TextStyle(color: AppColors.breakdown)),
+                ),
+              if (a.flag('cancel'))
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _cancel,
+                  icon: const Icon(Icons.block_rounded, color: AppColors.breakdown),
+                  label: const Text('Cancel invoice', style: TextStyle(color: AppColors.breakdown)),
+                ),
             ]),
           ]),
         ),
       ),
-      if (fin && (status == 'Generated' || status == 'Paid')) ...[
+      if (_blockers != null && _blockers!.isNotEmpty) ...[
         const SizedBox(height: 14),
-        _paymentsCard(b),
+        _BlockersCard(
+          blockers: _blockers!,
+          title: 'Fix these rows first',
+          onChanged: () async {
+            setState(() => _blockers = null);
+            await _load();
+          },
+        ),
+      ],
+      const SizedBox(height: 14),
+      SectionCard(
+        title: 'Documents',
+        child: Wrap(spacing: 8, runSpacing: 8, children: [
+          FilledButton.tonalIcon(onPressed: _vendorPdf, icon: const Icon(Icons.picture_as_pdf_rounded), label: const Text('Vendor invoice (PDF)')),
+          FilledButton.tonalIcon(onPressed: () => _certificate(), icon: const Icon(Icons.grid_on_rounded), label: const Text('Excel certificate')),
+          OutlinedButton.icon(onPressed: () => _pdf('summary'), icon: const Icon(Icons.summarize_rounded), label: const Text('Summary (PDF)')),
+          OutlinedButton.icon(
+            onPressed: () => _download('/equipment/payroll/batches/$_id/export.xlsx', '${draft ? 'draft-$_id' : _no.split(',').first.trim()}-data.xlsx'),
+            icon: const Icon(Icons.table_view_rounded),
+            label: const Text('Data (Excel)'),
+          ),
+          if (hasFuelDiff)
+            OutlinedButton.icon(onPressed: () => _pdf('fueldiff', suffix: 'fuel-difference-$_id'), icon: const Icon(Icons.local_gas_station_rounded), label: const Text('Fuel difference statements')),
+        ]),
+      ),
+      if (notes.isNotEmpty || a.flag('notes')) ...[
+        const SizedBox(height: 14),
+        SectionCard(
+          title: 'Debit / credit notes of this invoice (${notes.length})',
+          trailing: a.flag('notes') ? TextButton.icon(onPressed: () => _newNote(), icon: const Icon(Icons.add_rounded), label: const Text('New')) : null,
+          child: notes.isEmpty
+              ? const Text('None. A note is a separate document (DN- / CN-); it is listed with this invoice in the app only.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12.5))
+              : Column(children: [
+                  for (final n in notes)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      onTap: () async {
+                        await _openNote(context, n.intv('note_id'));
+                        _load();
+                      },
+                      leading: Icon(n.str('kind') == 'Credit' ? Icons.remove_circle_outline_rounded : Icons.add_circle_outline_rounded, color: AppColors.gold),
+                      title: Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                        Text(n.str('note_no', 'Draft note'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                        invoiceStatePill(noteState(n.str('status'))),
+                        if (n.strOrNull('equipment_code') != null) Text(n.str('equipment_code'), style: const TextStyle(fontSize: 12.5)),
+                      ]),
+                      subtitle: Text(n.str('reason'), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      trailing: Text(noteAmountText(n), style: TextStyle(fontWeight: FontWeight.w700, color: n.str('kind') == 'Credit' ? AppColors.breakdown : AppColors.working)),
+                    ),
+                ]),
+        ),
       ],
       const SizedBox(height: 14),
       SectionCard(
@@ -2045,12 +2105,15 @@ class _BatchScreenState extends State<BatchScreen> {
             _ItemTile(
               item: {...it, 'currency': cur},
               offsetKeys: _offsetKeysOf(b),
-              onOffset: draft && Auth.I.isAdmin && !_busy ? _setOffset : null,
-              offsetNote: draft ? (Auth.I.isAdmin ? null : 'Only the Admin decides this, before finalizing.') : 'Decided before the Finalize; a difference now goes through an official Correction.',
-              onRows: it.str('billing_mode') == 'DNR' ? null : () => _rows(it),
-              onPdf: () => _pdf('machine', equipmentId: it.intv('equipment_id'), suffix: it.str('equipment_code')),
-              onFuelPdf: (it.dblOrNull('fuel_difference') ?? 0) == 0 ? null : () => _pdf('fueldiff', equipmentId: it.intv('equipment_id'), suffix: 'fuel-${it.str('equipment_code')}'),
-              onCorrect: fin && (status == 'Generated' || status == 'Paid') && (Auth.I.isAdmin || Auth.I.isAccountant) ? () => _financialCorrection(it) : null,
+              onOffset: offsetsEditable ? _setOffset : null,
+              offsetNote: offsetsEditable ? null : 'Only the Admin decides this, while the invoice is a draft or issued (not handed over).',
+              onRows: it.str('billing_mode') == 'DNR' ? null : () => _rows(it, rowsEditable),
+              onPdf: () => _pdf('machine', equipmentId: it.intv('equipment_id'), suffix: it.strOrNull('invoice_no') ?? 'machine-${it.str('equipment_code')}'),
+              onExcel: () => _certificate(vendorId: it.intv('vendor_id'), equipmentId: it.intv('equipment_id'), code: it.str('equipment_code')),
+              onFuelPdf: (it.dblOrNull('fuel_difference') ?? 0) == 0
+                  ? null
+                  : () => _pdf('fueldiff', equipmentId: it.intv('equipment_id'), suffix: it.strOrNull('fuel_invoice_no') ?? 'fuel-${it.str('equipment_code')}'),
+              onNote: a.flag('notes') ? () => _newNote(item: it) : null,
             ),
         ]),
       ),
@@ -2064,6 +2127,7 @@ class _Timeline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final st = b.str('state');
     Widget step(String label, String? at, bool done, {String? by, Color color = AppColors.working}) => Expanded(
           child: Row(children: [
             Icon(done ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded, color: done ? color : AppColors.neutral, size: 20),
@@ -2071,18 +2135,19 @@ class _Timeline extends StatelessWidget {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(label, style: TextStyle(fontWeight: FontWeight.w700, color: done ? AppColors.ink : AppColors.muted)),
-                Text(at == null ? '-' : '${Fmt.date(at)} ${Fmt.time(at)}${by == null ? '' : '  ·  $by'}', style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                Text(at == null ? '-' : '${Fmt.date(at)}${by == null ? '' : '  ·  $by'}', style: const TextStyle(color: AppColors.muted, fontSize: 12)),
               ]),
             ),
           ]),
         );
     return Row(children: [
-      step('Generated', b.strOrNull('generated_at'), true, by: b.strOrNull('generated_by')),
-      step('Finalized', b.strOrNull('finalized_at'), b.flag('is_finalized'), color: AppColors.info),
-      if (b.str('status') == 'Voided')
-        step('Voided', b.strOrNull('voided_at'), true, color: AppColors.breakdown)
-      else
-        step('Paid', b.strOrNull('paid_at'), b.str('status') == 'Paid' || b.strOrNull('paid_at') != null),
+      step('Draft', b.strOrNull('generated_at'), true, by: b.strOrNull('generated_by'), color: AppColors.standby),
+      step('Issued', b.strOrNull('finalized_at'), b.flag('is_finalized'), color: AppColors.info),
+      step('Handed over', b.strOrNull('handed_over_at'), b.strOrNull('handed_over_at') != null),
+      if (st == 'returned' || st == 'replaced' || b.strOrNull('returned_at') != null)
+        step('Withdrawn', b.strOrNull('returned_at'), b.strOrNull('returned_at') != null, color: AppColors.edited)
+      else if (st == 'cancelled')
+        step('Cancelled', b.strOrNull('voided_at'), true, color: AppColors.breakdown),
     ]);
   }
 }
@@ -2135,9 +2200,9 @@ class _SnapshotSheetState extends State<_SnapshotSheet> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('${widget.item.machineName} at ${widget.item.str('site_code')}: paid rows', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+              Text('${widget.item.machineName} at ${widget.item.str('site_code')}: invoiced days', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
               if (widget.editable)
-                const Text('Tap a day to open it and edit it. The draft then shows the change; use "Recalculate".',
+                const Text('Tap a day to open it and edit it. A draft then asks to "Recalculate"; an issued invoice is brought up to date by itself (same number).',
                     style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
             ]),
           ),

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/fmt.dart';
 import 'ui.dart';
 
-/// Period of a running statement (vendor statement of account, machine billing history).
+/// Period of a running statement (vendor statement of invoices, machine billing history).
 /// Returns the query ({} = since the start, up to today) or null when cancelled.
 Future<Map<String, String>?> pickStatementPeriod(BuildContext context, String title) async {
   final now = Fmt.now();

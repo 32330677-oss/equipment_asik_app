@@ -222,7 +222,6 @@ class VendorDetailScreen extends StatefulWidget {
 class _VendorDetailScreenState extends State<VendorDetailScreen> {
   Json? _v;
   List<Json> _contracts = [];
-  List<Json> _opening = [];
   Object? _error;
 
   /// Contracts: Admin only. Vendor details and machines: Admin and Accountant.
@@ -239,8 +238,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
     try {
       final v = await Api.I.getObj('/equipment/vendors/${widget.id}');
       final c = await Api.I.getList('/equipment/vendors/${widget.id}/contracts');
-      final o = _canEdit ? await Api.I.getList('/equipment/opening-balances', query: {'vendor_id': widget.id}) : <Json>[];
-      if (mounted) setState(() { _v = v; _contracts = c; _opening = o; _error = null; });
+      if (mounted) setState(() { _v = v; _contracts = c; _error = null; });
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
@@ -332,14 +330,14 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
         load: () => Api.I.getBytes('/equipment/statements/vendor/${widget.id}.pdf', query: {'from': from, 'to': to, if (withUnapproved) 'include_unapproved': 'true', if (hide.isNotEmpty) 'hide': (hide.toList()..sort()).join(',')}));
   }
 
-  /// Running statement: statement of account (since the start, this year or chosen dates).
+  /// Running statement: every invoice and debit / credit note of the vendor (since the start, this year or chosen dates).
   Future<void> _account() async {
-    final q = await pickStatementPeriod(context, 'Statement of account');
+    final q = await pickStatementPeriod(context, 'Statement of invoices');
     if (q == null || !mounted) return;
     final code = _v!.str('vendor_code');
     PdfViewScreen.open(context,
-        title: 'Statement of account $code',
-        fileName: 'statement-of-account-$code-${q['to'] ?? Fmt.today()}.pdf',
+        title: 'Statement of invoices $code',
+        fileName: 'statement-of-invoices-$code-${q['to'] ?? Fmt.today()}.pdf',
         load: () => Api.I.getBytes('/equipment/statements/vendor/${widget.id}/account.pdf', query: q));
   }
 
@@ -356,7 +354,7 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
               onSelected: (x) => x == 'running' ? _account() : _statement(),
               itemBuilder: (_) => const [
                 PopupMenuItem(value: 'provisional', child: ListTile(leading: Icon(Icons.pending_actions_rounded), title: Text('Provisional statement'), subtitle: Text('Days not invoiced yet in a period (approved, or incl. not approved)'))),
-                PopupMenuItem(value: 'running', child: ListTile(leading: Icon(Icons.account_balance_wallet_rounded), title: Text('Statement of account'), subtitle: Text('Every invoice, payment and note, with the balance owed'))),
+                PopupMenuItem(value: 'running', child: ListTile(leading: Icon(Icons.account_balance_wallet_rounded), title: Text('Statement of invoices'), subtitle: Text('Every invoice and debit / credit note, with the running total'))),
               ],
               child: const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 10),
@@ -433,7 +431,6 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
                   const SizedBox(height: 14),
                   _contractsCard(),
                   const SizedBox(height: 14),
-                  if (_canEdit) ...[_openingCard(), const SizedBox(height: 14)],
                   _machinesCard(v),
                 ]),
     );
@@ -485,141 +482,6 @@ class _VendorDetailScreenState extends State<VendorDetailScreen> {
                         ],
                       ),
                   ]),
-                ),
-            ]),
-    );
-  }
-
-  // ------------------------------------------------------------- opening balances (money owed from before the system)
-  Future<void> _openingBalance({Json? o}) async {
-    final currencies = {for (final c in _contracts) c.str('currency')}.toList();
-    if (currencies.isEmpty) {
-      showSnack(context, 'Add a contract first: it gives the currency.', error: true);
-      return;
-    }
-    final machines = _v!.list('machines');
-    final amount = TextEditingController(text: o?.str('amount'));
-    final description = TextEditingController(text: o?.str('description'));
-    final reference = TextEditingController(text: o?.str('reference'));
-    final note = TextEditingController(text: o?.str('note'));
-    var currency = o?.str('currency') ?? currencies.first;
-    var asOf = o?.strOrNull('as_of_date') ?? Fmt.today();
-    var from = o?.strOrNull('period_from');
-    var to = o?.strOrNull('period_to');
-    int? machine = o?.intv('equipment_id') == 0 ? null : o?.intv('equipment_id');
-    final r = await showFormDialog<Json>(
-      context,
-      title: o == null ? 'Opening balance - ${_v!.str('vendor_name')}' : 'Edit opening balance',
-      width: 600,
-      onSave: () async {
-        final n = numOrNull(amount);
-        if (n == null || n <= 0) throw ApiException(null, 'VALIDATION', 'Type the amount still owed.');
-        final body = <String, dynamic>{
-          'amount': n, 'currency': currency, 'as_of_date': asOf, 'period_from': from, 'period_to': to, 'equipment_id': machine,
-          'description': description.text.trim(), 'reference': textOrNull(reference), 'note': textOrNull(note),
-        };
-        return asJson(o == null
-            ? await Api.I.post('/equipment/vendors/${widget.id}/opening-balances', body..removeWhere((k, x) => x == null))
-            : await Api.I.put('/equipment/opening-balances/${o.intv('opening_balance_id')}', body));
-      },
-      body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('Money still owed to this vendor from BEFORE the system (after the payments already made). '
-            'Tick "Add previous balances" on the next New invoice batch: it is added on its own line, paid with normal payment vouchers, '
-            'and the invoice of the new period is not changed.',
-            style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
-        const SizedBox(height: 12),
-        FormGrid(children: [
-          textField(amount, 'Amount still owed', number: true, required: true),
-          Dropdown<String>(label: 'Currency', value: currency, width: null, items: [
-            for (final c in currencies) DropdownMenuItem(value: c, child: Text(c)),
-          ], onChanged: (x) => set(() => currency = x ?? currency)),
-          DateField(label: 'Balance date *', value: asOf, onChanged: (x) => set(() => asOf = x ?? asOf)),
-          Dropdown<int?>(label: 'Machine (optional)', value: machine, width: null, items: [
-            const DropdownMenuItem(value: null, child: Text('Whole vendor')),
-            for (final m in machines) DropdownMenuItem(value: m.intv('equipment_id'), child: Text('${m.str('equipment_code')}  ${m.machineType}')),
-          ], onChanged: (x) => set(() => machine = x)),
-          DateField(label: 'Old period from', value: from, clearable: true, onChanged: (x) => set(() => from = x)),
-          DateField(label: 'Old period to', value: to, clearable: true, onChanged: (x) => set(() => to = x)),
-        ]),
-        const SizedBox(height: 12),
-        textField(description, 'Description (printed on the statement)', required: true, hint: 'e.g. Rent June - September 2026 not paid'),
-        const SizedBox(height: 12),
-        FormGrid(children: [
-          textField(reference, 'Old invoice / statement no.'),
-          textField(note, 'Note'),
-        ]),
-      ]),
-    );
-    if (r != null && mounted) {
-      showSnack(context, 'Opening balance saved.');
-      _load();
-    }
-  }
-
-  Future<void> _cancelOpening(Json o) async {
-    final reason = await promptText(context, 'Cancel opening balance', label: 'Why? (kept in the history)', minLength: 5, confirm: 'Cancel it');
-    if (reason == null) return;
-    try {
-      await Api.I.patch('/equipment/opening-balances/${o.intv('opening_balance_id')}/cancel', {'reason': reason});
-      if (mounted) showSnack(context, 'Opening balance cancelled.');
-      _load();
-    } catch (e) {
-      if (mounted) showError(context, e);
-    }
-  }
-
-  Widget _openingCard() {
-    Color stateColor(String s) => s == 'Open' ? AppColors.breakdown : s == 'Carried' ? AppColors.working : AppColors.neutral;
-    String stateText(Json o) => switch (o.str('state')) {
-          'Open' => 'Waiting for the next invoice',
-          'Carried' => 'In batch #${o.str('carried_to_batch_id')} (${o.str('carried_to_batch_state')})',
-          _ => 'Cancelled',
-        };
-    final open = <String, double>{};
-    for (final o in _opening.where((o) => o.str('state') == 'Open')) {
-      open[o.str('currency')] = (open[o.str('currency')] ?? 0) + o.dbl('amount');
-    }
-    return SectionCard(
-      title: 'Opening balances (before the system)',
-      trailing: FilledButton.tonalIcon(onPressed: () => _openingBalance(), icon: const Icon(Icons.account_balance_wallet_rounded), label: const Text('Add opening balance')),
-      child: _opening.isEmpty
-          ? const EmptyView(text: 'Nothing owed from before the system.', icon: Icons.account_balance_wallet_rounded)
-          : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              if (open.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: NoticeBox(
-                    color: AppColors.edited,
-                    icon: Icons.info_outline_rounded,
-                    text: 'Still to carry: ${open.entries.map((e) => Fmt.money(e.value, e.key)).join(' + ')}. '
-                        'Tick "Add previous balances" on the next New invoice batch of this vendor.',
-                  ),
-                ),
-              for (final o in _opening)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: CircleAvatar(backgroundColor: stateColor(o.str('state')).withValues(alpha: 0.12), child: Icon(Icons.history_rounded, color: stateColor(o.str('state')))),
-                  title: Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                    Text(Fmt.money2(o.strOrNull('amount'), o.str('currency')), style: const TextStyle(fontWeight: FontWeight.w800)),
-                    Pill(stateText(o), color: stateColor(o.str('state'))),
-                    if (o.strOrNull('equipment_code') != null) Pill(o.str('equipment_code'), color: AppColors.navy),
-                  ]),
-                  subtitle: Text('${o.str('description')}  ·  balance on ${Fmt.date(o.str('as_of_date'))}'
-                      '${o.strOrNull('period_from') == null ? '' : '  ·  period ${Fmt.date(o.str('period_from'))} - ${Fmt.date(o.str('period_to'))}'}'
-                      '${o.strOrNull('reference') == null ? '' : '  ·  ${o.str('reference')}'}'
-                      '${o.str('state') == 'Cancelled' ? '  ·  cancelled: ${o.str('cancel_reason')}' : ''}'),
-                  trailing: o.str('state') == 'Open'
-                      ? PopupMenuButton<String>(
-                          onSelected: (x) {
-                            if (x == 'edit') _openingBalance(o: o);
-                            if (x == 'cancel') _cancelOpening(o);
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit_rounded), title: Text('Edit'))),
-                            PopupMenuItem(value: 'cancel', child: ListTile(leading: Icon(Icons.block_rounded), title: Text('Cancel'))),
-                          ],
-                        )
-                      : null,
                 ),
             ]),
     );

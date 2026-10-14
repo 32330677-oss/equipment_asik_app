@@ -15,7 +15,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _s = Loadable<List<Json>>();
 
   static const _groups = <String, List<String>>{
-    'Paper sheets & invoices': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_finalize_requires_scan', 'eq_finalize_undo_hours', 'eq_paid_undo_hours', 'eq_default_currency'],
+    'Paper sheets & invoices': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_finalize_requires_scan', 'eq_default_currency'],
     'Billing rules': ['eq_weekly_off_day', 'eq_fuel_diff_allow_negative', 'eq_block_monthly_days_without_rows'],
     'Attendance checks': ['eq_meter_tolerance_pct', 'eq_long_session_review_hours', 'eq_late_entry_days', 'week_gate_enabled', 'week_start_day', 'eq_shift_continuity_minutes'],
     'General': ['company_name', 'app_time_zone', 'eq_live_refresh_seconds'],
@@ -24,7 +24,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'eq_payroll_requires_paper_match': 'Pay only rows matched with the signed paper',
     'eq_paper_tolerance_minutes': 'Paper tolerance (minutes)',
     'eq_timesheet_blank_rows': 'Blank rows on the printed sheet',
-    'payroll_finalize_admin_only': 'Only Admin can finalize / mark paid',
+    'payroll_finalize_admin_only': 'Only Admin can issue invoices (off: the Accountant issues too)',
     'eq_default_currency': 'Default contract currency',
     'eq_meter_tolerance_pct': 'Hour-meter tolerance (%)',
     'eq_long_session_review_hours': 'Long session warning (hours)',
@@ -34,13 +34,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'app_time_zone': 'Business time zone',
     'eq_live_refresh_seconds': 'Live board refresh (seconds)',
     'eq_shift_continuity_minutes': 'Continuous shifts: max gap (minutes)',
-    'eq_finalize_requires_scan': 'Finalize only with the signed sheets uploaded',
+    'eq_finalize_requires_scan': 'Hand over to finance only with the signed sheets uploaded',
     'eq_weekly_off_day': 'Weekly day off (monthly machines)',
     'eq_fuel_diff_allow_negative': 'Deduct the fuel difference when the official price falls below the base',
-    'eq_paid_undo_hours': 'Hours to undo "Mark paid" (0 = never)',
-    'eq_finalize_undo_hours': 'Hours to undo "Finalize" with the same invoice numbers (0 = never)',
     'eq_late_entry_days': 'Late entry after (days)',
-    'eq_block_monthly_days_without_rows': 'Monthly machines: days without a row block the invoice (generate only with a reason)',
+    'eq_block_monthly_days_without_rows': 'Monthly machines: days without a row block the invoice (create the draft only with a reason)',
   };
   static const _days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 

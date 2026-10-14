@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/api.dart';
+import '../../core/auth.dart';
 import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
@@ -12,8 +13,9 @@ import 'rate_card_form.dart' show dnrUnits;
 String dnrUnitShort(String u) => const {'trip': 'trip', 't': 't', 'm3': 'm³', 'km': 'km', 'pc': 'pc', 'load': 'load'}[u] ?? u;
 
 Color _stateColor(String? s) => switch (s) {
-      'Paid' => AppColors.working,
-      'Finalized' => AppColors.info,
+      'HandedOver' => AppColors.working,
+      'Returned' => AppColors.edited,
+      'Issued' => AppColors.info,
       'Draft' => AppColors.standby,
       _ => AppColors.neutral,
     };
@@ -174,8 +176,8 @@ class _DeliveryNotesScreenState extends State<DeliveryNotesScreen> {
                       ? const Pill('Cancelled', color: AppColors.neutral, outlined: true)
                       : r.intOrNull('in_batch_id') == null
                           ? const Pill('Not billed yet', color: AppColors.muted, outlined: true)
-                          : Pill('#${r.str('in_batch_id')} ${r.str('batch_state')}', color: _stateColor(r.strOrNull('batch_state')))),
-                  DataCell(r.str('status') == 'Cancelled' || r.str('batch_state') == 'Finalized' || r.str('batch_state') == 'Paid'
+                          : Pill('#${r.str('in_batch_id')} ${const {'HandedOver': 'Handed over', 'Returned': 'Withdrawn'}[r.str('batch_state')] ?? r.str('batch_state')}', color: _stateColor(r.strOrNull('batch_state')))),
+                  DataCell(r.str('status') == 'Cancelled' || r.str('batch_state') == 'HandedOver' || (r.str('batch_state') == 'Returned' && !Auth.I.isAdmin)
                       ? const SizedBox()
                       : PopupMenuButton<String>(
                           onSelected: (v) => v == 'edit' ? _edit(r) : _cancel(r),

@@ -19,6 +19,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'Billing rules': ['eq_weekly_off_day', 'eq_fuel_diff_allow_negative', 'eq_block_monthly_days_without_rows'],
     'Attendance checks': ['eq_meter_tolerance_pct', 'eq_long_session_review_hours', 'eq_late_entry_days', 'week_gate_enabled', 'week_start_day', 'eq_shift_continuity_minutes'],
     'General': ['company_name', 'app_time_zone', 'eq_live_refresh_seconds'],
+    'Documents (signatures)': ['doc_prepared_by_en', 'doc_prepared_by_ar', 'doc_approved_by_en', 'doc_approved_by_ar'],
   };
   static const _titles = <String, String>{
     'eq_payroll_requires_paper_match': 'Pay only rows matched with the signed paper',
@@ -39,6 +40,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'eq_fuel_diff_allow_negative': 'Deduct the fuel difference when the official price falls below the base',
     'eq_late_entry_days': 'Late entry after (days)',
     'eq_block_monthly_days_without_rows': 'Monthly machines: days without a row block the invoice (create the draft only with a reason)',
+    'doc_prepared_by_en': 'Prepared by (English) - printed on invoices and certificates',
+    'doc_prepared_by_ar': 'Prepared by (Arabic) - إعداد',
+    'doc_approved_by_en': 'Approved / certified by (English)',
+    'doc_approved_by_ar': 'Approved / certified by (Arabic) - اعتماد',
   };
   static const _days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 

@@ -10,7 +10,8 @@ import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
 
 /// Hours since the start of the project: every machine (regular, OT, total, invoiced / not invoiced yet), grouped by
-/// vendor with a total per vendor and a grand total. Optional vendor / site filter. PDF and Excel.
+/// vendor with a total per vendor and a grand total, then the amounts (per currency, never added across currencies).
+/// Optional vendor / site filter. PDF and Excel.
 class HoursReportScreen extends StatefulWidget {
   const HoursReportScreen({super.key});
   @override
@@ -88,7 +89,11 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
     } else if (_error != null) {
       body = ErrorView(error: _error!, onRetry: _load);
     } else {
-      body = _table(_data ?? {});
+      body = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _table(_data ?? {}),
+        const SizedBox(height: 16),
+        _moneyTable(_data ?? {}),
+      ]);
     }
 
     return ListView(padding: const EdgeInsets.all(16), children: [
@@ -97,7 +102,7 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           filters,
           const SizedBox(height: 8),
-          const Text('Hours as billed: in invoices (drafts included) + approved days not in any invoice yet. Rows still waiting for approval are only counted.',
+          const Text('Hours and amounts as billed: in invoices (drafts included) + approved days not in any invoice yet. Rows still waiting for approval are only counted.',
               style: TextStyle(color: AppColors.muted, fontSize: 12)),
         ]),
       ),
@@ -105,6 +110,82 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
       if (_loading && _data != null) const LinearProgressIndicator(),
       body,
     ]);
+  }
+
+  static String _money(double v, String cur) {
+    final s = cur == 'SYP' ? v.round().toString() : v.toStringAsFixed(2);
+    final neg = s.startsWith('-');
+    final parts = (neg ? s.substring(1) : s).split('.');
+    final whole = parts[0].replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
+    return '${neg ? '-' : ''}$whole${parts.length > 1 ? '.${parts[1]}' : ''}';
+  }
+
+  /// Amounts since the start: one row per machine and currency, a total per vendor and currency, a grand total.
+  Widget _moneyTable(Json d) {
+    final vendors = d.list('vendors');
+    if (vendors.isEmpty) return const SizedBox.shrink();
+    const bold = TextStyle(fontWeight: FontWeight.w800);
+    DataRow line(String vendor, String machine, Json x, {bool total = false, Color? color}) {
+      final cur = x.str('currency');
+      final st = total ? bold : null;
+      String m(String k, {bool dash = false}) => dash && x.dbl(k) == 0 ? '-' : _money(x.dbl(k), cur);
+      return DataRow(color: color == null ? null : WidgetStatePropertyAll(color), cells: [
+        DataCell(Text(vendor, style: total ? bold : const TextStyle(color: AppColors.muted))),
+        DataCell(Text(machine, style: st)),
+        DataCell(Text(cur, style: st)),
+        DataCell(Text(m('regular'), style: st)),
+        DataCell(Text(m('overtime', dash: true), style: st)),
+        DataCell(Text(m('other', dash: true), style: st)),
+        DataCell(Text(m('invoiced_net'), style: st)),
+        DataCell(Text(m('not_invoiced_net', dash: true), style: st)),
+        DataCell(Text(m('total'), style: bold)),
+      ]);
+    }
+
+    final rows = <DataRow>[];
+    for (final g in vendors) {
+      for (final mc in g.list('machines')) {
+        for (final x in mc.list('money')) {
+          rows.add(line(g.str('vendor_name'), '${mc.str('equipment_code')}  ${mc.strOrNull('machine_label') ?? mc.str('type_name')}', x));
+        }
+      }
+      for (final x in g.list('money')) {
+        rows.add(line('Total ${g.str('vendor_name')}', '', x, total: true, color: AppColors.navy.withValues(alpha: 0.06)));
+      }
+    }
+    if (vendors.length > 1) {
+      for (final x in d.list('money')) {
+        rows.add(line('GRAND TOTAL', '', x, total: true, color: AppColors.navy.withValues(alpha: 0.14)));
+      }
+    }
+    return Card(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+          child: Text('Amounts since the start (each currency on its own)', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppColors.ink)),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text('Net = regular + OT + other additions and deductions (standby, top-up, deductions, fuel, adjustments). Debit / credit notes are not included.',
+              style: TextStyle(color: AppColors.muted, fontSize: 12)),
+        ),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            headingRowColor: const WidgetStatePropertyAll(AppColors.navy),
+            headingTextStyle: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            columnSpacing: 22,
+            columns: const [
+              DataColumn(label: Text('Vendor')), DataColumn(label: Text('Machine')), DataColumn(label: Text('Currency')),
+              DataColumn(label: Text('Regular hour amount'), numeric: true), DataColumn(label: Text('OT hour amount'), numeric: true),
+              DataColumn(label: Text('Other add. & ded.'), numeric: true), DataColumn(label: Text('Net invoiced'), numeric: true),
+              DataColumn(label: Text('Net not invoiced yet'), numeric: true), DataColumn(label: Text('Total net'), numeric: true),
+            ],
+            rows: rows,
+          ),
+        ),
+      ]),
+    );
   }
 
   Widget _table(Json d) {

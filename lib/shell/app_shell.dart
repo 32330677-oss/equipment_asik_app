@@ -12,6 +12,7 @@ import '../screens/equipment/attendance_review_screen.dart';
 import '../screens/equipment/client_report_screen.dart';
 import '../screens/equipment/delivery_notes_screen.dart';
 import '../screens/equipment/fuel_adjustments_screen.dart';
+import '../screens/equipment/hours_report_screen.dart';
 import '../screens/equipment/live_board_screen.dart';
 import '../screens/equipment/machines_screen.dart';
 import '../screens/equipment/payroll_screen.dart';
@@ -51,6 +52,7 @@ class _AppShellState extends State<AppShell> {
       _NavItem('delivery-notes', 'Delivery notes (DNR)', Icons.local_shipping_rounded, () => const DeliveryNotesScreen()),
       _NavItem('machines', 'Machines', Icons.precision_manufacturing_rounded, () => const MachinesScreen(), section: 'Fleet'),
       _NavItem('vendors', 'Vendors', Icons.business_rounded, () => const VendorsScreen()),
+      _NavItem('hours-report', 'Hours report', Icons.timer_rounded, () => const HoursReportScreen()),
       _NavItem('sites', 'Sites', Icons.location_city_rounded, () => const SitesScreen(), section: 'Setup'),
       if (admin) _NavItem('users', 'Users', Icons.manage_accounts_rounded, () => const UsersScreen()),
       if (admin) _NavItem('settings', 'Settings', Icons.tune_rounded, () => const SettingsScreen()),

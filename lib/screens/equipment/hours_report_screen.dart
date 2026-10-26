@@ -21,11 +21,19 @@ class HoursReportScreen extends StatefulWidget {
 class _HoursReportScreenState extends State<HoursReportScreen> {
   PickOption? _vendor;
   PickOption? _site;
+  PickOption? _machine;
   Json? _data;
   Object? _error;
   bool _loading = false;
 
-  Map<String, dynamic> get _query => {if (_vendor != null) 'vendor_id': _vendor!.value, if (_site != null) 'site_id': _site!.value};
+  Map<String, dynamic> get _query => {
+        if (_vendor != null) 'vendor_id': _vendor!.value,
+        if (_site != null) 'site_id': _site!.value,
+        if (_machine != null) 'equipment_id': _machine!.value,
+      };
+
+  /// File name: the machine code when one machine is chosen.
+  String get _fileBase => 'equipment-hours-since-start${_machine == null ? '' : '-${_machine!.label.split(' ').first}'}-${Fmt.today()}';
 
   @override
   void initState() {
@@ -45,13 +53,13 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
 
   void _pdf() => PdfViewScreen.open(context,
       title: 'Hours since the start',
-      fileName: 'equipment-hours-since-start-${Fmt.today()}.pdf',
+      fileName: '$_fileBase.pdf',
       load: () => Api.I.getBytes('/equipment/reports/hours', query: {..._query, 'format': 'pdf'}));
 
   Future<void> _excel() async {
     try {
       final bytes = await Api.I.getBytes('/equipment/reports/hours', query: {..._query, 'format': 'xlsx'});
-      final msg = await FileSave.save(bytes, 'equipment-hours-since-start-${Fmt.today()}.xlsx');
+      final msg = await FileSave.save(bytes, '$_fileBase.xlsx');
       if (mounted) showSnack(context, msg);
     } catch (e) {
       if (mounted) showError(context, e);
@@ -71,7 +79,12 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
       PickerField(
         label: 'Vendor (all)', width: 280, icon: Icons.business_rounded, valueLabel: _vendor?.label,
         load: () => Lookups.vendors(),
-        onChanged: (p) { setState(() => _vendor = p); _load(); },
+        onChanged: (p) { setState(() { _vendor = p; _machine = null; }); _load(); },
+      ),
+      PickerField(
+        label: 'Machine (all)', width: 300, icon: Icons.precision_manufacturing_rounded, valueLabel: _machine?.label,
+        load: () => Lookups.machines(vendorId: _vendor?.value as int?),
+        onChanged: (p) { setState(() => _machine = p); _load(); },
       ),
       PickerField(
         label: 'Site (all)', width: 260, icon: Icons.location_city_rounded, valueLabel: _site?.label,

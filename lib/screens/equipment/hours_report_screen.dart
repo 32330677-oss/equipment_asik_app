@@ -22,6 +22,9 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
   PickOption? _vendor;
   PickOption? _site;
   PickOption? _machine;
+  /// PDF / Excel: 'since_start' (hours, then amounts: invoiced + not invoiced yet) or 'invoiced' (everything invoiced,
+  /// one line per machine with hours and amounts, a total per vendor and a grand total).
+  String _view = 'invoiced';
   Json? _data;
   Object? _error;
   bool _loading = false;
@@ -33,7 +36,8 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
       };
 
   /// File name: the machine code when one machine is chosen.
-  String get _fileBase => 'equipment-hours-since-start${_machine == null ? '' : '-${_machine!.label.split(' ').first}'}-${Fmt.today()}';
+  String get _fileBase =>
+      'equipment-${_view == 'invoiced' ? 'invoiced' : 'hours'}-since-start${_machine == null ? '' : '-${_machine!.label.split(' ').first}'}-${Fmt.today()}';
 
   @override
   void initState() {
@@ -52,13 +56,13 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
   }
 
   void _pdf() => PdfViewScreen.open(context,
-      title: 'Hours since the start',
+      title: _view == 'invoiced' ? 'Invoiced since the start' : 'Hours since the start',
       fileName: '$_fileBase.pdf',
-      load: () => Api.I.getBytes('/equipment/reports/hours', query: {..._query, 'format': 'pdf'}));
+      load: () => Api.I.getBytes('/equipment/reports/hours', query: {..._query, 'view': _view, 'format': 'pdf'}));
 
   Future<void> _excel() async {
     try {
-      final bytes = await Api.I.getBytes('/equipment/reports/hours', query: {..._query, 'format': 'xlsx'});
+      final bytes = await Api.I.getBytes('/equipment/reports/hours', query: {..._query, 'view': _view, 'format': 'xlsx'});
       final msg = await FileSave.save(bytes, '$_fileBase.xlsx');
       if (mounted) showSnack(context, msg);
     } catch (e) {
@@ -91,6 +95,15 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
         load: () => Lookups.sites(activeOnly: false),
         onChanged: (p) { setState(() => _site = p); _load(); },
       ),
+      SegmentedButton<String>(
+        segments: const [
+          ButtonSegment(value: 'invoiced', icon: Icon(Icons.receipt_long_rounded), label: Text('All invoiced')),
+          ButtonSegment(value: 'since_start', icon: Icon(Icons.schedule_rounded), label: Text('Incl. not invoiced')),
+        ],
+        selected: {_view},
+        showSelectedIcon: false,
+        onSelectionChanged: (v) => setState(() => _view = v.first),
+      ),
       FilledButton.icon(onPressed: _pdf, icon: const Icon(Icons.picture_as_pdf_rounded), label: const Text('PDF')),
       OutlinedButton.icon(onPressed: _excel, icon: const Icon(Icons.grid_on_rounded), label: const Text('Excel')),
       IconButton(onPressed: _loading ? null : _load, tooltip: 'Refresh', icon: const Icon(Icons.refresh_rounded)),
@@ -115,8 +128,11 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           filters,
           const SizedBox(height: 8),
-          const Text('Hours and amounts as billed: in invoices (drafts included) + approved days not in any invoice yet. Rows still waiting for approval are only counted.',
-              style: TextStyle(color: AppColors.muted, fontSize: 12)),
+          Text(
+              _view == 'invoiced'
+                  ? 'PDF / Excel: everything invoiced since the start (drafts included), one line per machine with hours and amounts, a total per vendor and a grand total per currency.'
+                  : 'PDF / Excel: hours and amounts as billed: in invoices (drafts included) + approved days not in any invoice yet. Rows still waiting for approval are only counted.',
+              style: const TextStyle(color: AppColors.muted, fontSize: 12)),
         ]),
       ),
       const SizedBox(height: 12),

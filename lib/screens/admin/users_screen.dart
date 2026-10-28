@@ -16,6 +16,7 @@ class UsersScreen extends StatefulWidget {
 
 class _UsersScreenState extends State<UsersScreen> {
   final _s = Loadable<List<Json>>();
+  Map<int, Json> _telegram = {};
   String? _role;
   String _q = '';
 
@@ -29,6 +30,11 @@ class _UsersScreenState extends State<UsersScreen> {
     setState(() { _s.loading = true; _s.error = null; });
     try {
       _s.data = await Api.I.getList('/users', query: {'role': _role, 'q': _q, 'page_size': 200});
+      try {
+        _telegram = {for (final l in await Api.I.getList('/telegram/links')) l.intv('user_id'): l};
+      } catch (_) {
+        _telegram = {}; // the bot is not installed on this server yet: nothing to show
+      }
     } catch (e) {
       _s.error = e;
     }
@@ -78,6 +84,19 @@ class _UsersScreenState extends State<UsersScreen> {
     if (reason == null) return;
     try {
       await Api.I.patch('/users/${u.intv('user_id')}/status', {'status': active ? 'Inactive' : 'Active', if (reason.isNotEmpty) 'reason': reason});
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  Future<void> _unlinkTelegram(Json u) async {
+    final reason = await promptText(context, 'Unlink Telegram of ${u.str('full_name')}?',
+        label: 'Why? (optional, kept in the audit log)', required: false, confirm: 'Unlink',
+        help: 'The bot stops answering in that Telegram chat. The supervisor can link again from the app.');
+    if (reason == null) return;
+    try {
+      await Api.I.delete('/telegram/links/${u.intv('user_id')}', {if (reason.isNotEmpty) 'reason': reason});
       _load();
     } catch (e) {
       if (mounted) showError(context, e);
@@ -142,6 +161,13 @@ class _UsersScreenState extends State<UsersScreen> {
                     const SizedBox(width: 6), const Pill('Locked', color: AppColors.breakdown, icon: Icons.lock),
                   ],
                   if (u.flag('must_change_password')) ...[const SizedBox(width: 6), const Pill('Temp. password', color: AppColors.standby)],
+                  if (_telegram.containsKey(u.intv('user_id'))) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: _telegram[u.intv('user_id')]!.strOrNull('telegram_username') == null ? 'Telegram linked' : 'Telegram @${_telegram[u.intv('user_id')]!.str('telegram_username')}',
+                      child: const Pill('Telegram', color: AppColors.info, icon: Icons.send_rounded),
+                    ),
+                  ],
                 ])),
                 DataCell(Text(u.strOrNull('last_login_at') == null ? 'Never' : '${Fmt.date(u.str('last_login_at'))} ${Fmt.time(u.str('last_login_at'))}')),
                 DataCell(PopupMenuButton<String>(
@@ -149,10 +175,12 @@ class _UsersScreenState extends State<UsersScreen> {
                     if (a == 'edit') _edit(u);
                     if (a == 'status') _toggle(u);
                     if (a == 'reset') _reset(u);
+                    if (a == 'telegram') _unlinkTelegram(u);
                   },
                   itemBuilder: (_) => [
                     const PopupMenuItem(value: 'edit', child: Text('Edit')),
                     const PopupMenuItem(value: 'reset', child: Text('Reset password')),
+                    if (_telegram.containsKey(u.intv('user_id'))) const PopupMenuItem(value: 'telegram', child: Text('Unlink Telegram')),
                     PopupMenuItem(
                       value: 'status',
                       enabled: u.intv('user_id') != Auth.I.userId,

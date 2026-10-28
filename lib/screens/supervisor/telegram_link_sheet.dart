@@ -91,8 +91,8 @@ class _TelegramLinkSheetState extends State<_TelegramLinkSheet> {
           else ...[
             Text(
               linked
-                  ? 'Your Telegram${user != null ? ' (@$user)' : ''} is linked. Send the bot a message to see your machines today.'
-                  : 'Link your Telegram to see your machines today from the bot. Recording by text and voice comes next.',
+                  ? 'Your Telegram${user != null ? ' (@$user)' : ''} is linked. Tell the bot what happened with your machines, in your own words or a voice note. It shows what it will record and saves drafts only after you confirm. Submit stays in the app.'
+                  : 'Link your Telegram to record your machines by text or voice note. The bot shows what it will record and saves drafts only after you confirm.',
               style: const TextStyle(color: AppColors.muted),
             ),
             const SizedBox(height: 16),

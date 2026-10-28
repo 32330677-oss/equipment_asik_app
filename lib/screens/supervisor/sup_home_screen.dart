@@ -10,6 +10,7 @@ import '../../core/theme.dart';
 import '../../widgets/ui.dart';
 import '../help/help_center_screen.dart';
 import 'day_board_screen.dart';
+import 'telegram_link_sheet.dart';
 
 /// Supervisor home: today's sites (one tap to the day board), rejected rows, paper sheets.
 class SupHomeScreen extends StatefulWidget {
@@ -241,6 +242,14 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
             onTap: () {
               Navigator.pop(context);
               _help();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.send_rounded),
+            title: const Text('Link Telegram'),
+            onTap: () {
+              Navigator.pop(context);
+              openTelegramLink(context);
             },
           ),
           const Divider(),

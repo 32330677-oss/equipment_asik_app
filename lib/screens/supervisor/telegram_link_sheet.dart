@@ -74,6 +74,7 @@ class _TelegramLinkSheetState extends State<_TelegramLinkSheet> {
     final d = _s.data;
     final linked = d?.flag('linked') ?? false;
     final enabled = d?.flag('bot_enabled') ?? false;
+    final allowed = d == null || d['allowed'] != false;
     final user = d?.strOrNull('telegram_username');
     return SafeArea(
       child: Padding(
@@ -96,7 +97,9 @@ class _TelegramLinkSheetState extends State<_TelegramLinkSheet> {
               style: const TextStyle(color: AppColors.muted),
             ),
             const SizedBox(height: 16),
-            if (!enabled && !linked)
+            if (!allowed)
+              const Text('The office switched the Telegram bot off for your account. Recording in the app works as usual.', style: TextStyle(color: AppColors.breakdown))
+            else if (!enabled && !linked)
               const Text('The bot is not switched on yet. Ask the office.', style: TextStyle(color: AppColors.breakdown))
             else if (!linked)
               FilledButton.icon(onPressed: _busy ? null : _link, icon: const Icon(Icons.open_in_new_rounded), label: const Text('Open Telegram and link'))

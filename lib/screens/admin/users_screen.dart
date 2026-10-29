@@ -17,6 +17,7 @@ class UsersScreen extends StatefulWidget {
 class _UsersScreenState extends State<UsersScreen> {
   final _s = Loadable<List<Json>>();
   Map<int, Json> _telegram = {};
+  Set<int> _tgBlocked = {};
   String? _role;
   String _q = '';
 
@@ -34,6 +35,11 @@ class _UsersScreenState extends State<UsersScreen> {
         _telegram = {for (final l in await Api.I.getList('/telegram/links')) l.intv('user_id'): l};
       } catch (_) {
         _telegram = {}; // the bot is not installed on this server yet: nothing to show
+      }
+      try {
+        _tgBlocked = {for (final b in await Api.I.getList('/telegram/access')) b.intv('user_id')};
+      } catch (_) {
+        _tgBlocked = {};
       }
     } catch (e) {
       _s.error = e;
@@ -103,6 +109,22 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  /// Switches the Telegram bot off (or back on) for one supervisor. Open by default.
+  Future<void> _telegramAccess(Json u, bool allow) async {
+    final reason = await promptText(context, allow ? 'Allow Telegram for ${u.str('full_name')}?' : 'Block Telegram for ${u.str('full_name')}?',
+        label: 'Why? (optional, kept in the audit log)', required: false, confirm: allow ? 'Allow' : 'Block',
+        help: allow
+            ? 'The supervisor can use the Telegram bot again.'
+            : 'The bot stops reading and recording for this supervisor, and he cannot link Telegram. Recording in the app is not affected.');
+    if (reason == null) return;
+    try {
+      await Api.I.put('/telegram/access/${u.intv('user_id')}', {'allowed': allow, if (reason.isNotEmpty) 'reason': reason});
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
   Future<void> _reset(Json u) async {
     final ok = await confirmDialog(context, 'Reset password', 'Create a new temporary password for ${u.str('full_name')}? The account is also unlocked.', confirm: 'Reset');
     if (!ok) return;
@@ -161,6 +183,10 @@ class _UsersScreenState extends State<UsersScreen> {
                     const SizedBox(width: 6), const Pill('Locked', color: AppColors.breakdown, icon: Icons.lock),
                   ],
                   if (u.flag('must_change_password')) ...[const SizedBox(width: 6), const Pill('Temp. password', color: AppColors.standby)],
+                  if (_tgBlocked.contains(u.intv('user_id'))) ...[
+                    const SizedBox(width: 6),
+                    const Pill('Telegram off', color: AppColors.neutral, icon: Icons.block),
+                  ],
                   if (_telegram.containsKey(u.intv('user_id'))) ...[
                     const SizedBox(width: 6),
                     Tooltip(
@@ -176,11 +202,17 @@ class _UsersScreenState extends State<UsersScreen> {
                     if (a == 'status') _toggle(u);
                     if (a == 'reset') _reset(u);
                     if (a == 'telegram') _unlinkTelegram(u);
+                    if (a == 'tg_block') _telegramAccess(u, false);
+                    if (a == 'tg_allow') _telegramAccess(u, true);
                   },
                   itemBuilder: (_) => [
                     const PopupMenuItem(value: 'edit', child: Text('Edit')),
                     const PopupMenuItem(value: 'reset', child: Text('Reset password')),
                     if (_telegram.containsKey(u.intv('user_id'))) const PopupMenuItem(value: 'telegram', child: Text('Unlink Telegram')),
+                    if (u.str('role') == 'Supervisor')
+                      _tgBlocked.contains(u.intv('user_id'))
+                          ? const PopupMenuItem(value: 'tg_allow', child: Text('Allow Telegram'))
+                          : const PopupMenuItem(value: 'tg_block', child: Text('Block Telegram')),
                     PopupMenuItem(
                       value: 'status',
                       enabled: u.intv('user_id') != Auth.I.userId,

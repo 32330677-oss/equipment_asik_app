@@ -295,7 +295,7 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         label: 'Hours (0 to ${max.toStringAsFixed(2)}; empty = not decided)', initial: cur == null ? '' : (cur / 60).toStringAsFixed(2), required: false, maxLines: 1);
     if (v == null || !mounted) return;
     final clear = v.isEmpty;
-    final hours = clear ? null : double.tryParse(v.replaceAll(',', '.'));
+    final hours = clear ? null : Fmt.parseNum(v);
     if (!clear && (hours == null || hours < 0 || hours > max)) {
       showError(context, ApiException(null, 'VALIDATION', 'Type a number of hours between 0 and ${max.toStringAsFixed(2)}.'));
       return;
@@ -417,8 +417,8 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         if (a == null || !mounted) return;
         final b = await promptText(context, 'Meter end', label: 'Meter end', initial: '${_cur(r, changes, 'meter_end') ?? ''}', maxLines: 1);
         if (b == null) return;
-        final ms = double.tryParse(a.replaceAll(',', '.'));
-        final me = double.tryParse(b.replaceAll(',', '.'));
+        final ms = Fmt.parseNum(a);
+        final me = Fmt.parseNum(b);
         if (ms == null || me == null) {
           if (mounted) showError(context, ApiException(null, 'VALIDATION', 'Type numbers for the meter readings.'));
           return;
@@ -446,6 +446,8 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
         if (p.strOrNull('end_time') != null)
           {'downtime_type': p.str('downtime_type'), 'start_time': p.str('start_time').substring(0, 16), 'end_time': p.str('end_time').substring(0, 16), 'reason': p.strOrNull('reason')},
     ];
+    // 31 Oct 2026: a period still open is kept by the server (closed at the check-out): shown, not sent
+    final open = [for (final p in r.list('downtime')) if (p.strOrNull('end_time') == null) p];
     return showDialog<List<Map<String, dynamic>>>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -454,7 +456,15 @@ class _AttendanceDetailSheetState extends State<AttendanceDetailSheet> {
           content: SizedBox(
             width: 480,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              if (items.isEmpty) const Padding(padding: EdgeInsets.all(8), child: Text('No period.', style: TextStyle(color: AppColors.muted))),
+              for (final p in open)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.timelapse_rounded, color: AppColors.breakdown),
+                  title: Text('${p.str('downtime_type')}  ${Fmt.time(p.str('start_time'))} - still open'),
+                  subtitle: const Text('Kept as it is. It is closed at the check-out time when the session gets one.'),
+                ),
+              if (items.isEmpty && open.isEmpty) const Padding(padding: EdgeInsets.all(8), child: Text('No period.', style: TextStyle(color: AppColors.muted))),
               for (final p in items)
                 ListTile(
                   dense: true,

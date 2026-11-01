@@ -461,6 +461,18 @@ class _HandoverScreenState extends State<HandoverScreen> {
 
   bool _match(String text) => _filter.isEmpty || text.toLowerCase().contains(_filter.toLowerCase());
 
+  /// Totals of the ticked documents per currency, as shown on this screen.
+  Map<String, double> _totals() {
+    final totals = <String, double>{};
+    for (final b in (_batches ?? <Json>[]).where((b) => _b.contains(b.intv('eq_batch_id')))) {
+      totals[b.str('currency')] = (totals[b.str('currency')] ?? 0) + b.dbl('total_net');
+    }
+    for (final n in (_notes ?? <Json>[]).where((n) => _n.contains(n.intv('note_id')))) {
+      totals[n.str('currency')] = (totals[n.str('currency')] ?? 0) + (n.str('kind') == 'Credit' ? -n.dbl('amount') : n.dbl('amount'));
+    }
+    return totals;
+  }
+
   Future<void> _submit() async {
     if (_b.isEmpty && _n.isEmpty) {
       showSnack(context, 'Choose at least one invoice or note.', error: true);
@@ -474,6 +486,11 @@ class _HandoverScreenState extends State<HandoverScreen> {
         'They are locked for everybody afterwards. To change one later, the Admin withdraws it from finance with a signed acknowledgement.',
         confirm: 'Hand over');
     if (!ok) return;
+    // 31 Oct 2026: the server refuses when the sheet would print other totals than the ones shown here
+    await _send({for (final e in _totals().entries) e.key: e.value.toStringAsFixed(2)});
+  }
+
+  Future<void> _send(Map<String, String> expected) async {
     setState(() => _busy = true);
     try {
       final h = asJson(await Api.I.post('/equipment/payroll/handovers', {
@@ -482,6 +499,7 @@ class _HandoverScreenState extends State<HandoverScreen> {
         'handed_on': _on,
         'receiver_name': _receiver.text.trim(),
         if (_note.text.trim().isNotEmpty) 'note': _note.text.trim(),
+        'expected_totals': expected,
       }));
       if (!mounted) return;
       showSnack(context, 'Handed over: ${h.str('handover_no')}');
@@ -490,6 +508,15 @@ class _HandoverScreenState extends State<HandoverScreen> {
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
+      if (e.code == 'TOTALS_CHANGED') {
+        final now = e.details?.obj('totals') ?? <String, dynamic>{};
+        final text = now.entries.map((x) => Fmt.money2('${x.value}', x.key)).join('  ·  ');
+        final again = await confirmDialog(context, 'The totals changed',
+            '${e.message}\n\nNew totals: $text', confirm: 'Hand over with these totals');
+        if (again) await _send({for (final x in now.entries) x.key: '${x.value}'});
+        await _load();
+        return;
+      }
       if (e.code == 'ROWS_NOT_APPROVED' || e.code == 'SCAN_MISSING' || e.code == 'REISSUE_FIRST') {
         final id = e.details?.intOrNull('eq_batch_id');
         await confirmDialog(context, 'Cannot hand over yet', '${e.message}${id == null ? '' : '\n\nOpen the invoice to fix it.'}', confirm: 'OK');
@@ -508,13 +535,7 @@ class _HandoverScreenState extends State<HandoverScreen> {
   Widget build(BuildContext context) {
     final batches = (_batches ?? <Json>[]).where((b) => _match('${b.str('vendor_invoice_no')} ${b.str('scope_vendor_name')} ${b.str('eq_batch_id')}')).toList();
     final notes = (_notes ?? <Json>[]).where((n) => _match('${n.str('note_no')} ${n.str('vendor_name')} ${n.str('equipment_code')}')).toList();
-    final totals = <String, double>{};
-    for (final b in (_batches ?? <Json>[]).where((b) => _b.contains(b.intv('eq_batch_id')))) {
-      totals[b.str('currency')] = (totals[b.str('currency')] ?? 0) + b.dbl('total_net');
-    }
-    for (final n in (_notes ?? <Json>[]).where((n) => _n.contains(n.intv('note_id')))) {
-      totals[n.str('currency')] = (totals[n.str('currency')] ?? 0) + (n.str('kind') == 'Credit' ? -n.dbl('amount') : n.dbl('amount'));
-    }
+    final totals = _totals();
     return Scaffold(
       appBar: AppBar(title: const Text('Hand over to finance')),
       body: _error != null

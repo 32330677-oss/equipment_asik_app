@@ -72,6 +72,30 @@ class Fmt {
     return r == 0 ? '${h}h' : '${h}h ${r}m';
   }
 
+  /// A number typed by a person (31 Oct 2026): Arabic digits accepted; "2,500" and "1,500,000" are thousands
+  /// ("2,500" = 2500, not 2.5); a single comma with 1-2 digits after it is a decimal point ("7,5" = 7.5).
+  /// Spaces are ignored. Anything else (letters, two dots) gives null.
+  static double? parseNum(String? input) {
+    if (input == null) return null;
+    const ar = '٠١٢٣٤٥٦٧٨٩';
+    const fa = '۰۱۲۳۴۵۶۷۸۹';
+    final b = StringBuffer();
+    for (final ch in input.trim().split('')) {
+      final i = ar.indexOf(ch);
+      final j = fa.indexOf(ch);
+      b.write(i >= 0 ? '$i' : j >= 0 ? '$j' : ch == '٫' ? '.' : ch == '٬' ? ',' : ch);
+    }
+    var t = b.toString().replaceAll(' ', '').replaceAll('\u00A0', '');
+    if (t.isEmpty) return null;
+    if (RegExp(r'^-?\d{1,3}(,\d{3})+(\.\d+)?$').hasMatch(t)) {
+      t = t.replaceAll(',', '');
+    } else if (RegExp(r'^-?\d+,\d{1,2}$').hasMatch(t)) {
+      t = t.replaceAll(',', '.');
+    }
+    if (!RegExp(r'^-?\d+(\.\d+)?$').hasMatch(t)) return null;
+    return double.tryParse(t);
+  }
+
   static String num2(num? v) => v == null ? '-' : NumberFormat('#,##0.00').format(v);
 
   static String money(num? v, [String? currency]) {

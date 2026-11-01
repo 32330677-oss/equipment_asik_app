@@ -100,7 +100,7 @@ class _FuelTabState extends State<_FuelTab> with AutomaticKeepAliveClientMixin {
     final v = await promptText(context, 'Litres - ${r.machineName} ${Fmt.date(r.str('issue_date'))}',
         label: 'Litres (from the receipt)', initial: r.str('liters'), maxLines: 1, confirm: 'Next');
     if (v == null) return;
-    final n = num.tryParse(v.replaceAll(',', '.'));
+    final n = Fmt.parseNum(v);
     if (n == null || n <= 0) {
       if (mounted) showSnack(context, 'Enter the number of litres.', error: true);
       return;

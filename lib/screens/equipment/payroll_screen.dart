@@ -1015,6 +1015,10 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
   late final TextEditingController _days;
   late final TextEditingController _hourly;
   bool _hourlyTyped = false;
+  // 31 Oct 2026: only a field the person changed is saved (a field only focused, or filled by the app, is not)
+  bool _amountEdited = false;
+  bool _daysEdited = false;
+  bool _hourlyEdited = false;
   bool _saving = false;
 
   @override
@@ -1032,6 +1036,9 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
     _days.text = r.str('divisor');
     _hourly.text = _fmt(r.dbl('hourly'));
     _hourlyTyped = r.str('hourly_source') == 'manual';
+    _amountEdited = false;
+    _daysEdited = false;
+    _hourlyEdited = false;
   }
 
   @override
@@ -1048,8 +1055,13 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
     super.dispose();
   }
 
-  static String _fmt(double v) => v.toStringAsFixed(v == v.roundToDouble() ? 0 : 4).replaceFirst(RegExp(r'\.?0+$'), '');
-  static double? _num(TextEditingController c) => double.tryParse(c.text.trim().replaceAll(',', '.'));
+  /// 1500 -> "1500", 7.6923 -> "7.6923", 2.50 -> "2.5" (31 Oct 2026: zeros are cut only after a decimal point;
+  /// a whole number used to lose its zeros, 1500 -> "15", and that was saved back).
+  static String _fmt(double v) {
+    final s = v.toStringAsFixed(v == v.roundToDouble() ? 0 : 4);
+    return s.contains('.') ? s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '') : s;
+  }
+  static double? _num(TextEditingController c) => Fmt.parseNum(c.text);
 
   /// Hourly price follows the amount and the days (until a price is typed by hand).
   void _recalc() {
@@ -1066,10 +1078,21 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
     final a = _num(_amount);
     final d = int.tryParse(_days.text.trim());
     final h = _num(_hourly);
-    final amountChanged = a != null && (a - (r.dblOrNull('amount') ?? r.dbl('monthly_rate'))).abs() > 0.004;
-    final daysChanged = d != null && d != r.intv('divisor');
-    final hourlyChanged = _hourlyTyped && h != null && (h - r.dbl('hourly')).abs() > 0.00005;
+    final amountChanged = _amountEdited && a != null && (a - (r.dblOrNull('amount') ?? r.dbl('monthly_rate'))).abs() > 0.004;
+    final daysChanged = _daysEdited && d != null && d != r.intv('divisor');
+    final hourlyChanged = _hourlyEdited && _hourlyTyped && h != null && (h - r.dbl('hourly')).abs() > 0.00005;
     if (!reset && !amountChanged && !daysChanged && !hourlyChanged) return;
+    // an amount far from the card's price is confirmed before it is saved (a typo changes the whole month)
+    final rate = r.dbl('monthly_rate');
+    if (!reset && amountChanged && rate > 0 && (a < rate * 0.5 || a > rate * 2)) {
+      final ok = await confirmDialog(context, 'Save ${_fmt(a)} ${r.str('currency')} for ${Fmt.monthLabel(r.str('month'))}?',
+          'The card\'s price is ${_fmt(rate)} ${r.str('currency')}. This amount is very different: check it before saving.', confirm: 'Save');
+      if (!ok) {
+        if (mounted) setState(_fill);
+        return;
+      }
+      if (!mounted) return;
+    }
     setState(() => _saving = true);
     try {
       final keepAmount = amountChanged || r.str('amount_source') == 'manual';
@@ -1081,7 +1104,8 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
         'monthly_amount': reset || !keepAmount || (a != null && (a - r.dbl('monthly_rate')).abs() < 0.005) ? null : a,
         // the days equal to the calendar are not an exception
         'working_days': reset || !keepDays || d == r.intv('calendar_days') ? null : d,
-        'hourly_rate': reset ? null : (_hourlyTyped ? h : null),
+        // a typed price is sent as the person typed it, or as the server keeps it (never re-read from the field)
+        'hourly_rate': reset ? null : (_hourlyEdited && _hourlyTyped ? h : (r.str('hourly_source') == 'manual' ? r.dbl('hourly') : null)),
       }));
       if (!mounted) return;
       widget.onSaved(row);
@@ -1145,11 +1169,11 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
         const SizedBox(height: 8),
         Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           _field(_amount, 'Amount of the month ($cur)', r.str('amount_source') == 'manual' ? 'typed for this month' : 'the card\'s price',
-              enabled: !locked, onChanged: (_) => _recalc()),
+              enabled: !locked, onChanged: (_) { _amountEdited = true; _recalc(); }),
           _field(_days, 'Divided by (days)', r.str('divisor_source') == 'manual' ? 'typed (calendar ${r.str('calendar_days')})' : 'working days of the month',
-              decimal: false, enabled: !locked, onChanged: (_) => _recalc()),
+              decimal: false, enabled: !locked, onChanged: (_) { _daysEdited = true; _recalc(); }),
           _field(_hourly, 'Hourly price', r.str('hourly_source') == 'manual' ? 'typed' : 'amount / days / hours',
-              enabled: !locked, onChanged: (_) => _hourlyTyped = true),
+              enabled: !locked, onChanged: (_) { _hourlyTyped = true; _hourlyEdited = true; }),
           IconButton(
             tooltip: 'Back to a normal month',
             onPressed: locked || _saving || !exception ? null : () => _save(reset: true),
@@ -1682,7 +1706,36 @@ class _BatchScreenState extends State<BatchScreen> {
         label: 'Why? (kept in the history)', minLength: 3, confirm: 'Cancel invoice',
         help: 'Its numbers stay cancelled and are never used again. Its days become free for a new invoice.');
     if (reason == null) return;
-    _act(() => Api.I.patch('/equipment/payroll/batches/$_id/void', {'reason': reason}), 'Invoice cancelled.');
+    setState(() => _busy = true);
+    try {
+      await Api.I.patch('/equipment/payroll/batches/$_id/void', {'reason': reason});
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      // 31 Oct 2026: debit / credit notes issued against it stay in the vendor statement: the Admin decides
+      if (e.code != 'NOTES_ATTACHED') {
+        showError(context, e);
+        return;
+      }
+      final notes = (e.details?.list('notes') ?? const <Json>[]).map((n) => '${n.str('note_no')} (${n.str('kind')} ${n.str('amount')} ${n.str('currency')})').join(', ');
+      final keep = await confirmDialog(context, 'Notes were issued against $_no',
+          '$notes\n\nThey stay counted in the vendor statement after the invoice is cancelled. Cancel them first if they no longer apply, '
+              'or keep them on purpose.',
+          confirm: 'Keep them and cancel the invoice', danger: true);
+      if (!keep) return;
+      await _act(() => Api.I.patch('/equipment/payroll/batches/$_id/void', {'reason': reason, 'keep_notes': true}), 'Invoice cancelled (notes kept).');
+      return;
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        showError(context, e);
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    showSnack(context, 'Invoice cancelled.');
+    await _load();
   }
 
   Future<void> _handOver() async {

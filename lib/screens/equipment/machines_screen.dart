@@ -735,7 +735,7 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
     } else if (action == 'price') {
       final v = await promptText(context, 'Correct the unit price', label: 'Unit price', initial: r.str('unit_price'), maxLines: 1,
           help: 'Only while no delivery note uses it. Otherwise close it and add a new price from the next day.');
-      final n = v == null ? null : num.tryParse(v.replaceAll(',', '.'));
+      final n = v == null ? null : Fmt.parseNum(v);
       if (n == null) return;
       _do(() => Api.I.put('/equipment/dnr-rates/$id', {'unit_price': n}), 'Price corrected.');
     } else if (action == 'cancel') {

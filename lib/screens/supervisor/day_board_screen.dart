@@ -108,25 +108,103 @@ class _DayBoardScreenState extends State<DayBoardScreen> {
 
   Future<void> _submit() async {
     final d = _d!;
-    final s = d.obj('submit');
     final notArrived = d.list('machines').where((m) => m.obj('attendance').isEmpty).map((m) => m.str('equipment_code')).toList();
-    final ok = await confirmDialog(
-      context,
-      'Submit ${Fmt.dayLabel(_date)}?',
-      '${s.intv('draft_rows')} row(s) will be sent to the office for approval. Until the office approves them you can still recall them to fix a mistake.'
-          '${notArrived.isEmpty ? '' : '\n\nNo record for: ${notArrived.join(', ')}. Mark them Absent first if they did not come.'}',
-      confirm: 'Submit day',
-    );
-    if (!ok) return;
+    // the Draft rows of THIS day (a session open since the day before belongs to its own day)
+    final drafts = [
+      for (final m in d.list('machines'))
+        if (m.obj('attendance').str('status') == 'Draft' && m.obj('attendance').str('record_date').startsWith(_date)) m,
+    ];
+    final keep = await _chooseDrafts(drafts, notArrived);
+    if (keep == null) return;
     try {
-      final r = asJson(await Api.I.post('/equipment/attendance/submit', {'site_id': widget.siteId, 'shift_type': widget.shift, 'record_date': _date}));
+      final r = asJson(await Api.I.post('/equipment/attendance/submit', {
+        'site_id': widget.siteId, 'shift_type': widget.shift, 'record_date': _date,
+        if (keep.isNotEmpty) 'leave_draft_ids': keep.toList(),
+      }));
       if (!mounted) return;
       final missing = (r['machines_without_row'] as List?)?.cast<Object>() ?? const [];
-      showSnack(context, '${r.intv('submitted')} row(s) submitted.${missing.isEmpty ? '' : ' Without record: ${missing.join(', ')}.'}', error: missing.isNotEmpty);
+      final kept = (r['kept_draft'] as List?)?.cast<Object>() ?? const [];
+      showSnack(context, '${r.intv('submitted')} row(s) submitted.${kept.isEmpty ? '' : ' Kept as draft: ${kept.join(', ')}.'}'
+          '${missing.isEmpty ? '' : ' Without record: ${missing.join(', ')}.'}', error: missing.isNotEmpty);
       _load();
     } catch (e) {
       if (mounted) showError(context, e);
     }
+  }
+
+  /// 1 Nov 2026: the rows that stay Draft when the day is submitted (null = cancelled). A session still open always
+  /// stays Draft (it cannot be sent without a check-out); the supervisor may keep other rows too.
+  Future<Set<int>?> _chooseDrafts(List<Json> drafts, List<String> notArrived) {
+    bool isOpen(Json m) => m.obj('attendance').str('day_status') == 'Working' && m.obj('attendance').strOrNull('check_out_time') == null;
+    int idOf(Json m) => m.obj('attendance').intv('eq_attendance_id');
+    final open = drafts.where(isOpen).toList();
+    final others = drafts.where((m) => !isOpen(m)).toList();
+    final keep = <int>{for (final m in open) idOf(m)};
+    var showOthers = false;
+    return showDialog<Set<int>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) {
+          final sending = drafts.length - keep.length;
+          return AlertDialog(
+            title: Text('Submit ${Fmt.dayLabel(_date)}?'),
+            content: SizedBox(
+              width: 460,
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  if (open.isNotEmpty) ...[
+                    const Text('Still working (no check-out): they stay as draft.', style: TextStyle(fontWeight: FontWeight.w700)),
+                    for (final m in open)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text('• ${m.machineName}: in ${Fmt.time(m.obj('attendance').str('check_in_time'))}'),
+                      ),
+                    const SizedBox(height: 10),
+                  ],
+                  Text('$sending row(s) will be sent to the office for approval. Until the office approves them you can still recall them to fix a mistake.'
+                      '${keep.isEmpty ? '' : ' The rows kept as draft stay editable: finish them and submit this day again.'}'),
+                  if (notArrived.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Text('No record for: ${notArrived.join(', ')}. Mark them Absent first if they did not come.'),
+                  ],
+                  if (others.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: showOthers,
+                      onChanged: (v) => set(() {
+                        showOthers = v == true;
+                        if (!showOthers) keep.removeWhere((id) => others.any((m) => idOf(m) == id));
+                      }),
+                      title: const Text('Keep other machines as draft too'),
+                    ),
+                    if (showOthers)
+                      for (final m in others)
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: const EdgeInsets.only(left: 24),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          value: keep.contains(idOf(m)),
+                          onChanged: (v) => set(() => v == true ? keep.add(idOf(m)) : keep.remove(idOf(m))),
+                          title: Text(m.machineName),
+                        ),
+                  ],
+                ]),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: sending > 0 ? () => Navigator.pop(ctx, Set<int>.of(keep)) : null,
+                child: Text(keep.isEmpty ? 'Submit day' : 'Submit the others ($sending)'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   /// Takes back every Submitted row of the day (not approved yet) to Draft.
@@ -721,14 +799,17 @@ class _SubmitBar extends StatelessWidget {
     final drafts = submit.intv('draft_rows');
     final open = submit.intv('open_rows');
     final gate = submit.obj('week_gate');
-    final can = submit.flag('can_submit');
+    // 1 Nov 2026: machines still working no longer stop the others (they stay as draft)
+    final can = submit.flag('can_submit') || submit.flag('can_submit_partial');
     String msg;
     if (drafts == 0) {
       msg = 'Nothing to submit for this day.';
-    } else if (open > 0) {
-      msg = '$open machine(s) still working: check them out before submitting.';
     } else if (gate.flag('blocked')) {
       msg = 'Submit last week first (${Fmt.date(gate.str('prev_start'))} - ${Fmt.date(gate.str('prev_end'))}).';
+    } else if (open > 0 && open >= drafts) {
+      msg = '$open machine(s) still working: check them out before submitting.';
+    } else if (open > 0) {
+      msg = '$open machine(s) still working: the other ${drafts - open} row(s) can be sent now, the open ones stay as draft.';
     } else {
       msg = '$drafts row(s) ready to send to the office.';
     }

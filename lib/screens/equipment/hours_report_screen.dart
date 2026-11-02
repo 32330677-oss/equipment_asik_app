@@ -11,7 +11,8 @@ import '../../widgets/ui.dart';
 
 /// Hours since the start of the project: every machine (regular, OT, total, invoiced / not invoiced yet), grouped by
 /// vendor with a total per vendor and a grand total, then the amounts (per currency, never added across currencies).
-/// Optional vendor / site filter. PDF and Excel.
+/// Optional vendor / site filter. PDF and Excel. Optional period From / To (2 Nov 2026): only the invoices whose period
+/// lies inside the dates (and approved days of the dates not invoiced yet); without dates: since the start, as before.
 class HoursReportScreen extends StatefulWidget {
   const HoursReportScreen({super.key});
   @override
@@ -22,6 +23,9 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
   PickOption? _vendor;
   PickOption? _site;
   PickOption? _machine;
+  String? _from;
+  String? _to;
+  bool get _hasPeriod => _from != null || _to != null;
   /// PDF / Excel: 'since_start' (hours, then amounts: invoiced + not invoiced yet) or 'invoiced' (everything invoiced,
   /// one line per machine with hours and amounts, a total per vendor and a grand total).
   String _view = 'invoiced';
@@ -33,11 +37,21 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
         if (_vendor != null) 'vendor_id': _vendor!.value,
         if (_site != null) 'site_id': _site!.value,
         if (_machine != null) 'equipment_id': _machine!.value,
+        if (_from != null) 'from': _from,
+        if (_to != null) 'to': _to,
       };
+
+  void _setPeriod(String? from, String? to) {
+    setState(() { _from = from; _to = to; });
+    _load();
+  }
+
+  String get _periodText => '${_from == null ? 'start' : Fmt.date(_from)} - ${_to == null ? 'today' : Fmt.date(_to)}';
 
   /// File name: the machine code when one machine is chosen.
   String get _fileBase =>
-      'equipment-${_view == 'invoiced' ? 'invoiced' : 'hours'}-since-start${_machine == null ? '' : '-${_machine!.label.split(' ').first}'}-${Fmt.today()}';
+      'equipment-${_view == 'invoiced' ? 'invoiced' : 'hours'}-${_hasPeriod ? '${_from ?? 'start'}_${_to ?? Fmt.today()}' : 'since-start'}'
+      '${_machine == null ? '' : '-${_machine!.label.split(' ').first}'}${_hasPeriod ? '' : '-${Fmt.today()}'}';
 
   @override
   void initState() {
@@ -56,7 +70,7 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
   }
 
   void _pdf() => PdfViewScreen.open(context,
-      title: _view == 'invoiced' ? 'Invoiced since the start' : 'Hours since the start',
+      title: _hasPeriod ? '${_view == 'invoiced' ? 'Invoiced' : 'Hours'} $_periodText' : (_view == 'invoiced' ? 'Invoiced since the start' : 'Hours since the start'),
       fileName: '$_fileBase.pdf',
       load: () => Api.I.getBytes('/equipment/reports/hours', query: {..._query, 'view': _view, 'format': 'pdf'}));
 
@@ -95,6 +109,8 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
         load: () => Lookups.sites(activeOnly: false),
         onChanged: (p) { setState(() => _site = p); _load(); },
       ),
+      DateField(label: 'From (start)', value: _from, width: 170, clearable: true, last: _to, onChanged: (v) => _setPeriod(v, _to)),
+      DateField(label: 'To (today)', value: _to, width: 170, clearable: true, first: _from, onChanged: (v) => _setPeriod(_from, v)),
       SegmentedButton<String>(
         segments: const [
           ButtonSegment(value: 'invoiced', icon: Icon(Icons.receipt_long_rounded), label: Text('All invoiced')),
@@ -124,10 +140,21 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
 
     return ListView(padding: const EdgeInsets.all(16), children: [
       SectionCard(
-        title: 'Hours since the start of the project',
+        title: _hasPeriod ? 'Hours of the period $_periodText' : 'Hours since the start of the project',
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           filters,
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final q in _quickRanges()) ActionChip(label: Text(q.$1), onPressed: () => _setPeriod(q.$2, q.$3)),
+            if (_hasPeriod) ActionChip(avatar: const Icon(Icons.history_rounded, size: 18), label: const Text('Since the start'), onPressed: () => _setPeriod(null, null)),
+          ]),
           const SizedBox(height: 8),
+          if (_hasPeriod)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Text('Period: an invoice is counted when its whole period lies inside these dates (e.g. 01/10 - 31/10 for the October invoices). '
+                  'Not invoiced yet = approved days of these dates.', style: TextStyle(color: AppColors.muted, fontSize: 12)),
+            ),
           Text(
               _view == 'invoiced'
                   ? 'PDF / Excel: everything invoiced since the start (drafts included), one line per machine with hours and amounts, a total per vendor and a grand total per currency.'
@@ -137,8 +164,27 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
       ),
       const SizedBox(height: 12),
       if (_loading && _data != null) const LinearProgressIndicator(),
+      if (_data != null && _data!.list('crossing').isNotEmpty) ...[
+        NoticeBox(
+          color: AppColors.standby,
+          icon: Icons.date_range_rounded,
+          title: '${_data!.list('crossing').length} invoice(s) not counted: their period crosses the chosen dates',
+          text: _data!.list('crossing').take(8).map((x) => '#${x.str('eq_batch_id')}  ${Fmt.date(x.str('start_date'))} - ${Fmt.date(x.str('end_date'))}  ${x.str('currency')}'
+              '${x.flag('draft') ? '  (draft)' : ''}').join('\n'),
+        ),
+        const SizedBox(height: 12),
+      ],
       body,
     ]);
+  }
+
+  /// Quick periods: last month, this month.
+  List<(String, String, String)> _quickRanges() {
+    final n = Fmt.now();
+    return [
+      ('Last month', Fmt.dateOf(DateTime(n.year, n.month - 1, 1)), Fmt.dateOf(DateTime(n.year, n.month, 0))),
+      ('This month', Fmt.dateOf(DateTime(n.year, n.month, 1)), Fmt.dateOf(DateTime(n.year, n.month + 1, 0))),
+    ];
   }
 
   static String _money(double v, String cur) {
@@ -191,7 +237,7 @@ class _HoursReportScreenState extends State<HoursReportScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
-          child: Text('Amounts since the start (each currency on its own)', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppColors.ink)),
+          child: Text('Amounts (each currency on its own)', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppColors.ink)),
         ),
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 0, 16, 8),

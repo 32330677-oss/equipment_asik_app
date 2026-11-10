@@ -11,6 +11,7 @@ import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/pdf_view.dart';
 import '../../widgets/ui.dart';
+import 'daily_timesheet_sheet.dart';
 
 /// Monthly paper sheets: progress of scans and reconciliation.
 class TimesheetsScreen extends StatefulWidget {
@@ -64,6 +65,11 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
             DropdownMenuItem(value: 'scan', child: Text('Needs a scan')),
             DropdownMenuItem(value: 'check', child: Text('Needs checking')),
           ], onChanged: (v) { _needs = v; _load(); }),
+          FilledButton.tonalIcon(
+            onPressed: () => DailyTimesheetSheet.open(context),
+            icon: const Icon(Icons.table_view_rounded),
+            label: const Text('Daily timesheet (Excel)'),
+          ),
         ]),
         Wrap(spacing: 12, runSpacing: 12, children: [
           KpiTile(label: 'Sheets', value: '${sheets.length}', icon: Icons.description_rounded),

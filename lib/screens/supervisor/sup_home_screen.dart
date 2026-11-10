@@ -8,6 +8,7 @@ import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/ui.dart';
+import '../equipment/daily_timesheet_sheet.dart';
 import '../help/help_center_screen.dart';
 import 'day_board_screen.dart';
 import 'telegram_link_sheet.dart';
@@ -121,6 +122,7 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
                             _load();
                           }
                         }),
+                        _heroButton(Icons.table_view_rounded, 'Daily timesheet (Excel)', () => DailyTimesheetSheet.open(context, date: _date)),
                       ]),
                     ]),
                   ),
@@ -235,6 +237,14 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
             title: const Text('Rejected rows'),
             trailing: _rejected == 0 ? null : Pill('$_rejected', color: AppColors.breakdown),
             onTap: () => _go(const RejectedRowsScreen()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.table_view_rounded),
+            title: const Text('Daily timesheet (Excel)'),
+            onTap: () {
+              Navigator.pop(context);
+              DailyTimesheetSheet.open(context, date: _date);
+            },
           ),
           ListTile(
             leading: const Icon(Icons.help_outline_rounded),

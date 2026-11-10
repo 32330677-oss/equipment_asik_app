@@ -8,6 +8,7 @@ import '../../core/fmt.dart';
 import '../../core/json.dart';
 import '../../core/theme.dart';
 import '../../widgets/ui.dart';
+import 'daily_timesheet_sheet.dart';
 
 /// Live board: every deployed machine and what it is doing now. Auto-refresh.
 class LiveBoardScreen extends StatefulWidget {
@@ -93,6 +94,11 @@ class _LiveBoardScreenState extends State<LiveBoardScreen> {
               },
               icon: const Icon(Icons.event_rounded),
               label: Text(_date == Fmt.today() ? 'Today' : Fmt.date(_date)),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => DailyTimesheetSheet.open(context, date: _date),
+              icon: const Icon(Icons.table_view_rounded),
+              label: const Text('Daily timesheet (Excel)'),
             ),
             IconButton.filledTonal(onPressed: _loading ? null : _load, icon: _loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded)),
           ],

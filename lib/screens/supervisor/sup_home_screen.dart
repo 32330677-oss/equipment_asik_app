@@ -122,7 +122,7 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
                             _load();
                           }
                         }),
-                        _heroButton(Icons.table_view_rounded, 'Daily timesheet (Excel)', () => DailyTimesheetSheet.open(context, date: _date)),
+                        _heroButton(Icons.table_view_rounded, 'Weekly timesheet (Excel)', () => WeeklyTimesheetSheet.open(context, date: _date)),
                       ]),
                     ]),
                   ),
@@ -240,10 +240,10 @@ class _SupHomeScreenState extends State<SupHomeScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.table_view_rounded),
-            title: const Text('Daily timesheet (Excel)'),
+            title: const Text('Weekly timesheet (Excel)'),
             onTap: () {
               Navigator.pop(context);
-              DailyTimesheetSheet.open(context, date: _date);
+              WeeklyTimesheetSheet.open(context, date: _date);
             },
           ),
           ListTile(

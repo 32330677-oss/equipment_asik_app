@@ -66,9 +66,9 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
             DropdownMenuItem(value: 'check', child: Text('Needs checking')),
           ], onChanged: (v) { _needs = v; _load(); }),
           FilledButton.tonalIcon(
-            onPressed: () => DailyTimesheetSheet.open(context),
+            onPressed: () => WeeklyTimesheetSheet.open(context),
             icon: const Icon(Icons.table_view_rounded),
-            label: const Text('Daily timesheet (Excel)'),
+            label: const Text('Weekly timesheet (Excel)'),
           ),
         ]),
         Wrap(spacing: 12, runSpacing: 12, children: [

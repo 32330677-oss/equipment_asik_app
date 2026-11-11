@@ -8,12 +8,13 @@ import '../../core/theme.dart';
 import '../../widgets/lookups.dart';
 import '../../widgets/ui.dart';
 
-/// Daily equipment timesheet (Excel, ready to print): every machine of the day in ONE sheet, grouped
-/// Site > Shift > Vendor, with the Supervisor / Approved by signatures at the end.
-/// Machines with nothing recorded stay empty, so the sheet can be printed and filled by hand; a recorded
-/// machine comes out filled. Supervisor: his own sites. Admin / Accountant: every site, or one site.
-class DailyTimesheetSheet extends StatefulWidget {
-  const DailyTimesheetSheet({super.key, this.initialDate, this.showSitePicker = false});
+/// Weekly equipment timesheet (Excel, ready to print). It replaced the daily one (Nov 2026); the file keeps its name.
+/// One sheet per vendor, one box per machine with a line per day (Saturday to Thursday; Friday only when worked):
+/// In, Out, Lunch (min), Our supervisor / Vendor driver signatures, Remarks; Accountant and Administration at the end.
+/// Recorded days come out filled, the others stay empty to fill by hand.
+/// Supervisor: his own sites. Admin / Accountant: every site, or one site.
+class WeeklyTimesheetSheet extends StatefulWidget {
+  const WeeklyTimesheetSheet({super.key, this.initialDate, this.showSitePicker = false});
 
   final String? initialDate;
   final bool showSitePicker;
@@ -25,17 +26,17 @@ class DailyTimesheetSheet extends StatefulWidget {
       isScrollControlled: true,
       showDragHandle: true,
       useSafeArea: true,
-      builder: (_) => DailyTimesheetSheet(initialDate: date, showSitePicker: !Auth.I.isSupervisor),
+      builder: (_) => WeeklyTimesheetSheet(initialDate: date, showSitePicker: !Auth.I.isSupervisor),
     );
     if (msg != null && context.mounted) showSnack(context, msg);
   }
 
   @override
-  State<DailyTimesheetSheet> createState() => _DailyTimesheetSheetState();
+  State<WeeklyTimesheetSheet> createState() => _WeeklyTimesheetSheetState();
 }
 
-class _DailyTimesheetSheetState extends State<DailyTimesheetSheet> {
-  /// The server accepts a day up to 31 days ahead (a blank sheet printed before the day).
+class _WeeklyTimesheetSheetState extends State<WeeklyTimesheetSheet> {
+  /// The server accepts a day up to 31 days ahead (a blank sheet printed before the week).
   static const _maxDaysAhead = 31;
 
   late String _date;
@@ -43,6 +44,13 @@ class _DailyTimesheetSheetState extends State<DailyTimesheetSheet> {
   PickOption? _site;
   bool _busy = false;
   String? _error;
+
+  /// The week of [_date] as the server counts it (the weekly off day is a setting): label, from, to.
+  String? _weekLabel;
+  String? _weekFrom;
+  String? _weekTo;
+  bool _weekLoading = false;
+  int _weekRequest = 0;
 
   /// [date] + [days] as yyyy-MM-dd (calendar days, safe across daylight-saving changes).
   static String _addDays(String date, int days) {
@@ -58,17 +66,73 @@ class _DailyTimesheetSheetState extends State<DailyTimesheetSheet> {
     super.initState();
     final init = widget.initialDate ?? _today;
     _date = init.compareTo(_lastDate) > 0 ? _lastDate : init;
+    _weekLoading = true;
+    _loadWeek();
   }
 
-  void _setDate(String d) => setState(() {
-        _date = d;
-        _error = null;
+  Future<void> _loadWeek() async {
+    final req = ++_weekRequest; // only the answer of the latest request is shown
+    try {
+      final w = await Api.I.getObj('/equipment/reports/weekly-timesheet/week', query: {'date': _date});
+      if (!mounted || req != _weekRequest) return;
+      setState(() {
+        _weekLabel = w['label']?.toString();
+        _weekFrom = w['from']?.toString();
+        _weekTo = w['to']?.toString();
+        _weekLoading = false;
       });
+    } catch (_) {
+      if (!mounted || req != _weekRequest) return;
+      setState(() {
+        _weekLabel = null;
+        _weekFrom = null;
+        _weekTo = null;
+        _weekLoading = false;
+      });
+    }
+  }
+
+  void _setDate(String d) {
+    setState(() {
+      _date = d;
+      _error = null;
+      _weekLoading = true;
+      _weekLabel = null;
+      _weekFrom = null;
+      _weekTo = null;
+    });
+    _loadWeek();
+  }
+
+  /// The quick choices: a day inside each week.
+  Map<String, String> get _quick => {
+        'Last week': _addDays(_today, -7),
+        'This week': _today,
+        'Next week': _addDays(_today, 7),
+      };
+
+  /// The quick choice whose week holds [_date] (null when another week is chosen).
+  String? get _selectedQuick {
+    for (final e in _quick.entries) {
+      if (e.value == _date) return e.key;
+    }
+    final from = _weekFrom;
+    final to = _weekTo;
+    if (from == null || to == null) return null;
+    for (final e in _quick.entries) {
+      // the off day after "to" still belongs to the week
+      if (e.value.compareTo(from) >= 0 && e.value.compareTo(_addDays(to, 1)) <= 0 && _date.compareTo(from) >= 0 && _date.compareTo(_addDays(to, 1)) <= 0) {
+        return e.key;
+      }
+    }
+    return null;
+  }
 
   String get _fileName {
-    final shift = _shift == 'All' ? 'All-shifts' : '$_shift-shift';
+    final week = _weekFrom != null && _weekTo != null ? '${_weekFrom}_to_$_weekTo' : _date;
+    final shift = _shift == 'All' ? '' : '-$_shift';
     final site = _site == null ? '' : '-${_site!.label.trim().split(RegExp(r'\s+')).first}';
-    return 'Timesheet-$_date-$shift$site.xlsx'.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    return 'Weekly-Timesheet-$week$shift$site.xlsx'.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
   }
 
   Future<void> _download() async {
@@ -78,7 +142,7 @@ class _DailyTimesheetSheetState extends State<DailyTimesheetSheet> {
     });
     try {
       final siteId = _site?.value;
-      final bytes = await Api.I.getBytes('/equipment/reports/daily-timesheet.xlsx', query: {
+      final bytes = await Api.I.getBytes('/equipment/reports/weekly-timesheet.xlsx', query: {
         'date': _date,
         'shift': _shift,
         if (siteId != null) 'site_id': siteId,
@@ -97,12 +161,9 @@ class _DailyTimesheetSheetState extends State<DailyTimesheetSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final today = _today;
-    final quick = <String, String>{'Yesterday': _addDays(today, -1), 'Today': today, 'Tomorrow': _addDays(today, 1)};
-    final otherDay = !quick.containsValue(_date);
-    final future = _date.compareTo(today) > 0;
-    final d = Fmt.parse(_date);
-    final longDay = d == null ? _date : '${Fmt.dayLabel(_date)} ${d.year}';
+    final selected = _selectedQuick;
+    final otherWeek = selected == null;
+    final weekText = _weekLabel ?? (_weekLoading ? 'Finding the week...' : 'Week of ${Fmt.date(_date)}');
 
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
@@ -122,7 +183,7 @@ class _DailyTimesheetSheetState extends State<DailyTimesheetSheet> {
                 const SizedBox(width: 12),
                 const Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Daily timesheet', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AppColors.ink)),
+                    Text('Weekly timesheet', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AppColors.ink)),
                     Text('Excel file, ready to print', style: TextStyle(color: AppColors.muted, fontSize: 13)),
                   ]),
                 ),
@@ -130,23 +191,23 @@ class _DailyTimesheetSheetState extends State<DailyTimesheetSheet> {
               const SizedBox(height: 12),
               Text(
                 widget.showSitePicker
-                    ? 'Every machine of the day in one sheet, by site, shift and vendor, with the signatures at the end.'
-                    : 'All the machines of your sites in one sheet, by site, shift and vendor, with the signatures at the end.',
+                    ? 'One sheet per vendor, a box per machine with a line per day to sign. Accountant and Administration sign at the end.'
+                    : 'One sheet per vendor for your sites, a box per machine with a line per day to sign.',
                 style: const TextStyle(color: AppColors.muted, fontSize: 13),
               ),
               const SizedBox(height: 20),
-              const _Label('Day'),
+              const _Label('Week'),
               Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                for (final e in quick.entries)
+                for (final e in _quick.entries)
                   ChoiceChip(
                     label: Text(e.key),
-                    selected: _date == e.value,
+                    selected: selected == e.key,
                     onSelected: _busy ? null : (_) => _setDate(e.value),
                   ),
                 ChoiceChip(
-                  avatar: Icon(Icons.event_rounded, size: 18, color: otherDay ? AppColors.navy : AppColors.muted),
-                  label: Text(otherDay ? Fmt.dayLabel(_date) : 'Other day'),
-                  selected: otherDay,
+                  avatar: Icon(Icons.event_rounded, size: 18, color: otherWeek ? AppColors.navy : AppColors.muted),
+                  label: Text(otherWeek ? 'Week of ${Fmt.dayLabel(_date)}' : 'Other week'),
+                  selected: otherWeek,
                   showCheckmark: false,
                   onSelected: _busy
                       ? null
@@ -156,19 +217,25 @@ class _DailyTimesheetSheetState extends State<DailyTimesheetSheet> {
                         },
                 ),
               ]),
-              const SizedBox(height: 8),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Icon(future ? Icons.edit_note_rounded : Icons.fact_check_rounded, size: 18, color: AppColors.muted),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    future
-                        ? '$longDay has not been recorded yet: the sheet comes out empty, ready to fill by hand.'
-                        : '$longDay: recorded machines come out filled, the others stay empty to fill by hand.',
-                    style: const TextStyle(color: AppColors.muted, fontSize: 12.5),
-                  ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppColors.gold.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.gold.withValues(alpha: 0.35)),
                 ),
-              ]),
+                child: Row(children: [
+                  const Icon(Icons.date_range_rounded, size: 18, color: AppColors.gold),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(weekText, style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.ink))),
+                ]),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Days already recorded come out filled; the others stay empty to fill by hand. Signature boxes are always empty.',
+                style: TextStyle(color: AppColors.muted, fontSize: 12.5),
+              ),
               const SizedBox(height: 18),
               const _Label('Shift'),
               SegmentedButton<String>(

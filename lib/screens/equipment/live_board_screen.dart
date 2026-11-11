@@ -96,9 +96,9 @@ class _LiveBoardScreenState extends State<LiveBoardScreen> {
               label: Text(_date == Fmt.today() ? 'Today' : Fmt.date(_date)),
             ),
             OutlinedButton.icon(
-              onPressed: () => DailyTimesheetSheet.open(context, date: _date),
+              onPressed: () => WeeklyTimesheetSheet.open(context, date: _date),
               icon: const Icon(Icons.table_view_rounded),
-              label: const Text('Daily timesheet (Excel)'),
+              label: const Text('Weekly timesheet (Excel)'),
             ),
             IconButton.filledTonal(onPressed: _loading ? null : _load, icon: _loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded)),
           ],

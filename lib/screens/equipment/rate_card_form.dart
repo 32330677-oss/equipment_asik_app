@@ -54,6 +54,8 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
   late String _from;
   String? _to;
   String _mode = 'Hourly';
+  // Monthly (16 Nov 2026): '' = one price for both shifts (as before); 'Day' / 'Night' = this card prices that shift only
+  String _shift = '';
   final _hourly = TextEditingController();
   final _daily = TextEditingController();
   final _monthly = TextEditingController();
@@ -113,6 +115,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
         _from = today.compareTo(start) > 0 ? today : Fmt.dateOf(Fmt.parse(start)!.add(const Duration(days: 1)));
       }
       _mode = c.str('billing_mode', 'Hourly');
+      _shift = c.strOrNull('shift_type') ?? '';
     }
     // the values of a real card (a "New DNR price" start carries only the mode and the contract)
     if (c != null && c.containsKey('standard_hours_per_day')) {
@@ -196,6 +199,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       'hourly_rate': _mode == 'Hourly' ? numOrNull(_hourly) : null,
       'daily_rate': _mode == 'Daily' ? numOrNull(_daily) : null,
       'monthly_rate': _mode == 'Monthly' ? numOrNull(_monthly) : null,
+      'shift_type': _mode == 'Monthly' && _shift.isNotEmpty ? _shift : null,
       'standard_hours_per_day': numOrNull(_stdHours),
       // no minimum billable hours: not used by the company (an old value is cleared when the card is saved)
       'min_billable_hours_per_day': null,
@@ -221,7 +225,7 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
       'notes': textOrNull(_notes),
     };
     // On edit, nullable fields are sent as null so an old value is cleared; required ones fall back to the stored value.
-    const nullable = {'hourly_rate', 'daily_rate', 'monthly_rate', 'min_billable_hours_per_day', 'overtime_threshold_hours', 'overtime_rate',
+    const nullable = {'shift_type', 'hourly_rate', 'daily_rate', 'monthly_rate', 'min_billable_hours_per_day', 'overtime_threshold_hours', 'overtime_rate',
       'half_day_threshold_hours', 'operator_daily_rate', 'notes'};
     m.removeWhere((k, v) => v == null && !((_editing || _revising) && nullable.contains(k)));
     return m;
@@ -425,6 +429,12 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
               if (_mode == 'Hourly') textField(_hourly, 'Price per hour', number: true, required: true),
               if (_mode == 'Daily') textField(_daily, 'Price per day', number: true, required: true),
               if (_mode == 'Monthly') textField(_monthly, 'Price per month', number: true, required: true),
+              if (_mode == 'Monthly')
+                Dropdown<String>(label: 'Shift', value: _shift, width: null, items: const [
+                  DropdownMenuItem(value: '', child: Text('Both shifts (one monthly price)')),
+                  DropdownMenuItem(value: 'Day', child: Text('Day shift only')),
+                  DropdownMenuItem(value: 'Night', child: Text('Night shift only')),
+                ], onChanged: (v) => setState(() => _shift = v ?? _shift)),
               textField(_stdHours, _mode == 'Monthly' ? 'Working hours per day at the site' : 'Standard hours per day', number: true, required: true, suffix: 'h'),
               if (_mode == 'Daily')
                 Dropdown<String>(label: 'Partial day', value: _partial, width: null, items: const [
@@ -444,7 +454,9 @@ class _RateCardFormScreenState extends State<RateCardFormScreen> {
                       'Hourly price = monthly price / working days of the month (days minus Fridays) / hours per day. '
                       'Every working day is due its hours on its own: missing hours are deducted; extra hours are overtime (if "Pay overtime" is on) '
                       'or, if the Admin decides it on the invoice, cover missing hours. '
-                      'A month billed differently (e.g. the vendor is paid the 27th day) gets an EXCEPTION for that machine and month on New invoice batch.'
+                      'A month billed differently (e.g. the vendor is paid the 27th day) gets an EXCEPTION for that machine and month on New invoice batch. '
+                      'A machine working Day and Night at two different monthly prices gets two cards: one "Day shift only" and one "Night shift only" '
+                      '(same contract, same dates, from the 1st of a month); each shift is then billed as its own monthly contract.'
                   : null),
           if (_mode == 'Monthly') _section('Overtime', [
             SwitchListTile(

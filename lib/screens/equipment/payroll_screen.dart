@@ -671,11 +671,11 @@ class _NewPayrollScreenState extends State<NewPayrollScreen> {
               const SizedBox(height: 8),
               for (final t in _terms!)
                 _MonthTermsTile(
-                  key: ValueKey('${t.str('equipment_id')}-${t.str('month')}'),
+                  key: ValueKey('${t.str('equipment_id')}-${t.str('month')}-${t.str('shift_type')}'),
                   row: t,
                   onSaved: (row) {
                     _changed(() {
-                      final i = _terms!.indexWhere((x) => x.intv('equipment_id') == row.intv('equipment_id') && x.str('month') == row.str('month'));
+                      final i = _terms!.indexWhere((x) => x.intv('equipment_id') == row.intv('equipment_id') && x.str('month') == row.str('month') && x.str('shift_type') == row.str('shift_type'));
                       if (i >= 0) _terms![i] = row;
                     });
                   },
@@ -1100,6 +1100,8 @@ class _MonthTermsTileState extends State<_MonthTermsTile> {
       final row = asJson(await Api.I.put('/equipment/payroll/monthly-terms', {
         'equipment_id': r.intv('equipment_id'),
         'month': r.str('month'),
+        // a machine with a Day and a Night card: the exception of that shift (16 Nov 2026)
+        if (r.strOrNull('shift_type') != null) 'shift_type': r.str('shift_type'),
         // the amount equal to the card's price is not an exception
         'monthly_amount': reset || !keepAmount || (a != null && (a - r.dbl('monthly_rate')).abs() < 0.005) ? null : a,
         // the days equal to the calendar are not an exception
@@ -1232,6 +1234,9 @@ class _ItemTile extends StatelessWidget {
     final net = preview ? item.str('net') : item.str('net_amount');
     final gross = preview ? item.str('gross') : item.str('gross_amount');
     final ded = preview ? item.str('deductions') : item.str('deductions_amount');
+    // 16 Nov 2026: an item of a Day / Night card (a machine with two shift cards has two items)
+    final shift = item.strOrNull('shift_type') ?? item.obj('rate_snapshot').strOrNull('shift_type');
+    String offKey(Json mo) => '${item.str('equipment_id')}|${mo.str('month')}${shift == null ? '' : '|$shift'}';
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       color: AppColors.surface,
@@ -1243,7 +1248,7 @@ class _ItemTile extends StatelessWidget {
           title: Row(children: [
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${item.str('equipment_code')}  ${item.machineType}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                Text('${item.str('equipment_code')}${shift == null ? '' : ' ($shift)'}  ${item.machineType}', style: const TextStyle(fontWeight: FontWeight.w800)),
                 Text('${item.str('vendor_name')}  ·  ${item.str('site_code')}  ·  ${item.str('billing_mode')}', style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
                 if (item.strOrNull('invoice_no') != null)
                   Padding(
@@ -1287,12 +1292,12 @@ class _ItemTile extends StatelessWidget {
                 decoration: BoxDecoration(color: AppColors.gold.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
                 child: Text(_monthText(mo, item.str('currency')), style: const TextStyle(fontSize: 12.5)),
               ),
-              if (mo.dbl('offset_possible_hours') > 0 || mo.dbl('offset_hours') != 0 || offsetKeys.contains('${item.str('equipment_id')}|${mo.str('month')}'))
+              if (mo.dbl('offset_possible_hours') > 0 || mo.dbl('offset_hours') != 0 || offsetKeys.contains(offKey(mo)))
                 _OffsetBox(
                   mo: mo,
-                  on: offsetKeys.contains('${item.str('equipment_id')}|${mo.str('month')}'),
+                  on: offsetKeys.contains(offKey(mo)),
                   note: offsetNote,
-                  onChanged: onOffset == null ? null : (v) => onOffset!('${item.str('equipment_id')}|${mo.str('month')}', v),
+                  onChanged: onOffset == null ? null : (v) => onOffset!(offKey(mo), v),
                 ),
             ],
             Table(
@@ -2320,4 +2325,4 @@ String _staleReason(Json r) {
     default:
       return r.str('message', r.str('code'));
   }
-}
+}

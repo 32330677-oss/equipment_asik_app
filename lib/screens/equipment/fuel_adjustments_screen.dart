@@ -405,7 +405,7 @@ class _AdjustmentsTabState extends State<_AdjustmentsTab> with AutomaticKeepAliv
                 DataCell(Text(r.machineName, style: const TextStyle(fontWeight: FontWeight.w700))),
                 DataCell(Text(r.str('vendor_name'))),
                 DataCell(Text(r.str('site_code', 'any'))),
-                DataCell(Text(r.str('adjustment_type'))),
+                DataCell(Text(r.strOrNull('shift_type') == null ? r.str('adjustment_type') : '${r.str('adjustment_type')} (${r.str('shift_type')})')),
                 DataCell(Text(Fmt.money(r.dbl('amount'), r.str('currency')),
                     style: TextStyle(fontWeight: FontWeight.w800, color: r.dbl('amount') < 0 ? AppColors.breakdown : AppColors.working))),
                 DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 260), child: Text(r.str('reason'), maxLines: 2, overflow: TextOverflow.ellipsis))),
@@ -439,6 +439,8 @@ Future<Json?> showAdjustmentDialog(BuildContext context, {PickOption? machine, P
   var d = date ?? Fmt.today();
   var type = 'Other';
   var deduction = false;
+  // 16 Nov 2026: a monthly machine with a Day and a Night card says which shift the adjustment is for ('' = its card)
+  var shift = '';
   final amount = TextEditingController();
   final why = TextEditingController(text: reason ?? '');
   return showFormDialog<Json>(
@@ -450,7 +452,7 @@ Future<Json?> showAdjustmentDialog(BuildContext context, {PickOption? machine, P
       final a = (numOrNull(amount) ?? 0).abs();
       return asJson(await Api.I.post('/equipment/adjustments', {
         'equipment_id': m!.value, 'site_id': s?.value, 'adjustment_date': d, 'adjustment_type': type,
-        'amount': deduction ? -a : a, 'reason': why.text.trim(),
+        'amount': deduction ? -a : a, 'reason': why.text.trim(), if (shift.isNotEmpty) 'shift_type': shift,
       }));
     },
     body: (ctx, set) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -464,7 +466,15 @@ Future<Json?> showAdjustmentDialog(BuildContext context, {PickOption? machine, P
               type = v ?? type;
               deduction = _deductionTypes.contains(type);
             })),
+        Dropdown<String>(label: 'Shift', value: shift, width: null, items: const [
+          DropdownMenuItem(value: '', child: Text('The machine card')),
+          DropdownMenuItem(value: 'Day', child: Text('Day shift card')),
+          DropdownMenuItem(value: 'Night', child: Text('Night shift card')),
+        ], onChanged: (v) => set(() => shift = v ?? shift)),
       ]),
+      const SizedBox(height: 6),
+      const Text('Shift: only for a monthly machine with a Day card and a Night card (each shift at its own price).',
+          style: TextStyle(color: AppColors.muted, fontSize: 12)),
       const SizedBox(height: 14),
       SegmentedButton<bool>(
         segments: const [

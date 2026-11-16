@@ -16,7 +16,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   static const _groups = <String, List<String>>{
     'Paper sheets & invoices': ['eq_payroll_requires_paper_match', 'eq_paper_tolerance_minutes', 'eq_timesheet_blank_rows', 'payroll_finalize_admin_only', 'eq_finalize_requires_scan', 'eq_default_currency'],
-    'Billing rules': ['eq_weekly_off_day', 'eq_fuel_diff_allow_negative', 'eq_block_monthly_days_without_rows'],
+    'Billing rules': ['eq_weekly_off_day', 'eq_fuel_diff_allow_negative', 'eq_block_monthly_days_without_rows', 'eq_shift_rate_cards_enabled'],
     'Attendance checks': ['eq_meter_tolerance_pct', 'eq_long_session_review_hours', 'eq_late_entry_days', 'week_gate_enabled', 'week_start_day', 'eq_shift_continuity_minutes'],
     'General': ['company_name', 'app_time_zone', 'eq_live_refresh_seconds'],
     'Documents (signatures)': ['doc_prepared_by_en', 'doc_prepared_by_ar', 'doc_approved_by_en', 'doc_approved_by_ar'],
@@ -40,6 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'eq_fuel_diff_allow_negative': 'Deduct the fuel difference when the official price falls below the base',
     'eq_late_entry_days': 'Late entry after (days)',
     'eq_block_monthly_days_without_rows': 'Monthly machines: days without a row block the invoice (create the draft only with a reason)',
+    'eq_shift_rate_cards_enabled': 'Monthly machines: allow a Day card and a Night card (each shift at its own monthly price)',
     'doc_prepared_by_en': 'Prepared by (English) - printed on invoices and certificates',
     'doc_prepared_by_ar': 'Prepared by (Arabic) - إعداد',
     'doc_approved_by_en': 'Approved / certified by (English)',

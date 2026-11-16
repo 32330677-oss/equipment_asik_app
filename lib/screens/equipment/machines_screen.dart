@@ -24,8 +24,13 @@ String rateText(Json r) {
       return '${Fmt.money2(r.strOrNull('hourly_rate'), cur)} / h';
     case 'Daily':
       return '${Fmt.money2(r.strOrNull('daily_rate'), cur)} / day';
-    case 'Monthly':
-      return '${Fmt.money2(r.strOrNull('monthly_rate'), cur)} / month';
+    case 'Monthly': {
+      // 16 Nov 2026: a card of one shift says it; a machine with a Day and a Night card shows both prices
+      final shift = r.strOrNull('shift_type') ?? r.strOrNull('rate_shift_type');
+      final night = r.strOrNull('night_monthly_rate');
+      if (shift == 'Day' && night != null) return '${Fmt.money2(r.strOrNull('monthly_rate'), cur)} Day + ${Fmt.money2(night, cur)} Night / month';
+      return '${Fmt.money2(r.strOrNull('monthly_rate'), cur)} / month${shift == null ? '' : ' ($shift shift)'}';
+    }
   }
   return '-';
 }
@@ -947,4 +952,4 @@ class _MachineDetailScreenState extends State<MachineDetailScreen> {
             ]),
     );
   }
-}
+}
